@@ -185,6 +185,7 @@ func (r *ImportReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 }
 
 func (r *ImportReconciler) sync(log logr.Logger, req reconcile.Request) (dvSyncResult, error) {
+	log.V(1).Info("*** Syncing DataVolume", "name", req.Name, "namespace", req.Namespace)
 	syncState, err := r.syncImport(log, req)
 	if err == nil {
 		err = r.syncUpdate(log, &syncState)
@@ -193,6 +194,7 @@ func (r *ImportReconciler) sync(log logr.Logger, req reconcile.Request) (dvSyncR
 }
 
 func (r *ImportReconciler) syncImport(log logr.Logger, req reconcile.Request) (dvSyncState, error) {
+	log.V(1).Info("*** syncImport DataVolume", "name", req.Name, "namespace", req.Namespace)
 	syncState, syncErr := r.syncCommon(log, req, r.cleanup, nil)
 	if syncErr != nil || syncState.result != nil {
 		return syncState, syncErr

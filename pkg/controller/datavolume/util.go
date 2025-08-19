@@ -83,9 +83,11 @@ func RenderPvc(ctx context.Context, client client.Client, pvc *v1.PersistentVolu
 
 // renderPvcSpec creates a new PVC Spec based on either the dv.spec.pvc or dv.spec.storage section
 func renderPvcSpec(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
+	log.V(1).Info("*** rendering PVC spec", "namespace", dv.Namespace, "name", dv.Name)
 	if dv.Spec.PVC != nil {
 		return dv.Spec.PVC.DeepCopy(), nil
 	} else if dv.Spec.Storage != nil {
+		log.V(1).Info("*** rendering PVC spec from storage", "namespace", dv.Namespace, "name", dv.Name)
 		return pvcFromStorage(client, recorder, log, dv, pvc)
 	}
 
@@ -93,14 +95,18 @@ func renderPvcSpec(client client.Client, recorder record.EventRecorder, log logr
 }
 
 func pvcFromStorage(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
+	log.V(1).Info("*** in pvcFromStorage()", "namespace", dv.Namespace, "name", dv.Name)
 	var pvcSpec *v1.PersistentVolumeClaimSpec
 
 	isWebhookRenderingEnabled, err := featuregates.IsWebhookPvcRenderingEnabled(client)
 	if err != nil {
 		return nil, err
 	}
+	log.V(1).Info("***", "isWebhookEnabled", isWebhookRenderingEnabled)
 
 	shouldRender := !isWebhookRenderingEnabled || dv.Labels[common.PvcApplyStorageProfileLabel] != "true"
+
+	log.V(1).Info("***", "shouldRender", shouldRender)
 
 	if pvc == nil {
 		pvcSpec = copyStorageAsPvc(dv.Spec.Storage)

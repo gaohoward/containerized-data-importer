@@ -74,6 +74,9 @@ func NewSnapshotCloneController(
 	installerLabels map[string]string,
 ) (controller.Controller, error) {
 	client := mgr.GetClient()
+
+	log.V(1).Info("*** creating snapshot clone controller", "clonerImage", clonerImage, "importerImage", importerImage)
+
 	reconciler := &SnapshotCloneReconciler{
 		CloneReconcilerBase: CloneReconcilerBase{
 			ReconcilerBase: ReconcilerBase{
@@ -145,6 +148,9 @@ func (r *SnapshotCloneReconciler) addDataVolumeSnapshotCloneControllerWatches(mg
 
 // Reconcile loop for the clone data volumes
 func (r *SnapshotCloneReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	log := r.log.WithValues("request", req)
+	log.V(1).Info("*** starting snapshot clone reconciliation cycle ===")
+
 	return r.reconcile(ctx, req, r)
 }
 
@@ -174,33 +180,46 @@ func (r *SnapshotCloneReconciler) updateAnnotations(dataVolume *cdiv1.DataVolume
 }
 
 func (r *SnapshotCloneReconciler) sync(log logr.Logger, req reconcile.Request) (dvSyncResult, error) {
+	log.V(1).Info("*** syncing snapshot clone", "request", req)
 	syncState, err := r.syncSnapshotClone(log, req)
 	if err == nil {
+		log.V(1).Info("*** sync ok, update", "state", syncState)
 		err = r.syncUpdate(log, &syncState)
 	}
+	log.V(1).Info("*** return from snap.sync()", "syncState", syncState, "syncErr", err)
 	return syncState.dvSyncResult, err
 }
 
 func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconcile.Request) (dvSyncState, error) {
+	log.V(1).Info("*** in syncSnapshotClone", "request", req)
 	syncRes, syncErr := r.syncCommon(log, req, r.cleanup, r.prepare)
 	if syncErr != nil || syncRes.result != nil {
 		return syncRes, syncErr
 	}
+
+	log.V(1).Info("*** in syncSnapshotClone synCommon done", "syncRes", syncRes)
 
 	pvc := syncRes.pvc
 	pvcSpec := syncRes.pvcSpec
 	datavolume := syncRes.dvMutated
 
 	staticProvisionPending := checkStaticProvisionPending(pvc, datavolume)
+
+	log.V(1).Info("*** checking static provisioning pending", "staticProvisionPending", staticProvisionPending)
+
 	_, prePopulated := datavolume.Annotations[cc.AnnPrePopulated]
 	requiresWork, err := r.pvcRequiresWork(pvc, datavolume)
 	if err != nil {
 		return syncRes, err
 	}
 
+	log.V(1).Info("*** other checks", "prePopulated", prePopulated, "requiresWork", requiresWork, "staticProvisionPending", staticProvisionPending)
+
 	if !requiresWork || prePopulated || staticProvisionPending {
 		return syncRes, nil
 	}
+
+	log.V(1).Info("*** ensuring extended token for DataVolume", "namespace", datavolume.Namespace, "name", datavolume.Name)
 
 	if addedToken, err := r.ensureExtendedTokenDV(datavolume); err != nil {
 		return syncRes, err
@@ -209,22 +228,30 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 		return syncRes, nil
 	}
 
+	log.V(1).Info("*** checking pvc ", "pvc", pvc)
+
 	if pvc == nil {
 		// Check if source snapshot exists and do proper validation before attempting to clone
 		if done, err := r.validateCloneAndSourceSnapshot(&syncRes); err != nil || !done {
+			log.V(1).Info("*** failed to validate clone and source snapshot", "err", err)
 			return syncRes, err
 		}
 
 		if datavolume.Spec.Storage != nil {
+			log.V(1).Info("*** checking storage size", "storage", datavolume.Spec.Storage)
 			err := r.detectCloneSize(log, &syncRes)
 			if err != nil {
+				log.V(1).Info("*** failed to detect clone size", "err", err)
 				return syncRes, err
 			}
+			log.V(1).Info("*** detected clone size", "syncRes", syncRes)
 		}
 
 		pvcModifier := r.updateAnnotations
 		if syncRes.usePopulator {
+			log.V(1).Info("*** using populator")
 			if isCrossNamespaceClone(datavolume) {
+				log.V(1).Info("*** checking cross namespace clone")
 				if !cc.HasFinalizer(datavolume, crossNamespaceFinalizer) {
 					cc.AddFinalizer(datavolume, crossNamespaceFinalizer)
 					return syncRes, r.syncCloneStatusPhase(&syncRes, cdiv1.CloneScheduled, nil)
@@ -232,13 +259,18 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 			}
 			pvcModifier = r.updatePVCForPopulation
 		} else {
+			log.V(1).Info("*** using legacy clone")
 			if err := r.initLegacyClone(&syncRes); err != nil {
+				log.V(1).Info("*** failed to init legacy clone", "err", err)
 				return syncRes, err
 			}
 		}
 
+		log.V(1).Info("*** creating pvc for datavolume...")
+
 		targetPvc, err := r.createPvcForDatavolume(datavolume, pvcSpec, pvcModifier)
 		if err != nil {
+			log.V(1).Info("*** failed to create pvc for datavolume", "err", err)
 			if cc.ErrQuotaExceeded(err) {
 				syncErr = r.syncDataVolumeStatusPhaseWithEvent(&syncRes, cdiv1.Pending, nil,
 					Event{
@@ -253,28 +285,36 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 			return syncRes, err
 		}
 		pvc = targetPvc
+		log.V(1).Info("*** created pvc for datavolume", "pvc", pvc)
 	}
 
 	if syncRes.usePopulator {
+		log.V(1).Info("*** using populator so reconciling volume clone source CR", "syncRes", syncRes)
 		if err := r.reconcileVolumeCloneSourceCR(&syncRes); err != nil {
 			return syncRes, err
 		}
+
+		log.V(1).Info("*** checking clone type", "pvc", pvc)
 
 		ct, ok := pvc.Annotations[cc.AnnCloneType]
 		if ok {
 			cc.AddAnnotation(datavolume, cc.AnnCloneType, ct)
 		}
 	} else {
+		log.V(1).Info("*** no populator, fallback to hostAssisted")
 		cc.AddAnnotation(datavolume, cc.AnnCloneType, string(cdiv1.CloneStrategyHostAssisted))
 		if err := r.fallbackToHostAssisted(pvc); err != nil {
+			log.V(1).Info("*** failed to fallback to hostAssisted", "err", err)
 			return syncRes, err
 		}
 	}
 
+	log.V(1).Info("*** try ensure extended token")
 	if err := r.ensureExtendedTokenPVC(datavolume, pvc); err != nil {
 		return syncRes, err
 	}
 
+	log.V(1).Info("*** return from syncSnapshot", "syncRes", syncRes, "syncErr", syncErr)
 	return syncRes, syncErr
 }
 
