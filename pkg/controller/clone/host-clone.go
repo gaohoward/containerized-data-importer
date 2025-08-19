@@ -195,6 +195,42 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
+	if myVolumeMode := cc.GetVolumeMode(claim); myVolumeMode == corev1.PersistentVolumeFilesystem {
+		// It is possible when the source pvc has VolumMode 'block'
+		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
+		sourcePvc := &corev1.PersistentVolumeClaim{}
+		sourcePvcKey := client.ObjectKey{Namespace: p.Namespace, Name: p.SourceName}
+
+		if err := p.Client.Get(ctx, sourcePvcKey, sourcePvc); err != nil {
+			return nil, err
+		}
+
+		realSourcePvcSizeRequest := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+
+		if claim.Spec.Resources.Requests == nil {
+			claim.Spec.Resources.Requests = make(corev1.ResourceList)
+		}
+
+		if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+			// If the source PVC is fs, just copy the size request
+			claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
+		} else {
+			// If the source PVC is block, we need to account for the overhead
+			usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim)
+
+			if err != nil {
+				return nil, err
+			}
+			if usableSpace.Cmp(realSourcePvcSizeRequest) < 0 {
+				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, realSourcePvcSizeRequest.Value(), &claim.Spec)
+				if err != nil {
+					return nil, err
+				}
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+			}
+		}
+	}
+
 	if err := p.Client.Create(ctx, claim); err != nil {
 		checkQuotaExceeded(p.Recorder, p.Owner, err)
 		return nil, err
