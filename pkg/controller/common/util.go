@@ -2319,3 +2319,74 @@ func CopyEvents(srcPVC, targetPVC client.Object, c client.Client, recorder recor
 		recorder.Event(targetPVC, newEvent.Type, newEvent.Reason, formattedMsg)
 	}
 }
+
+func GetUsableSpace(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) (resource.Quantity, error) {
+	sizeRequest := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	volumeMode := util.ResolveVolumeMode(pvc.Spec.VolumeMode)
+
+	if volumeMode == corev1.PersistentVolumeFilesystem {
+		fsOverhead, err := GetFilesystemOverheadForStorageClass(ctx, c, pvc.Spec.StorageClassName)
+		if err != nil {
+			return resource.Quantity{}, err
+		}
+		fsOverheadFloat, _ := strconv.ParseFloat(string(fsOverhead), 64)
+		usableSpaceRaw := util.GetUsableSpace(fsOverheadFloat, sizeRequest.Value())
+
+		return *resource.NewScaledQuantity(usableSpaceRaw, 0), nil
+	}
+
+	return sizeRequest, nil
+}
+
+func GetPVCDataSourceKind(pvc *corev1.PersistentVolumeClaim) string {
+	pvcDataSource := pvc.Spec.DataSource
+	pvcDataSourceRef := pvc.Spec.DataSourceRef
+	if pvcDataSourceRef != nil {
+		return pvcDataSourceRef.Kind
+	}
+	if pvcDataSource != nil {
+		return pvcDataSource.Kind
+	}
+	return ""
+}
+
+// In host clone the source PVC comes from 2 sources
+// 1. snaphot clone - in this case there is no DV associated with the sourcePVC
+// 2. direct PVC clone - in this case there may be a DV associated with the sourcePVC
+func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) *cdiv1.DataVolume {
+	pvcDataSourceKind := GetPVCDataSourceKind(pvc)
+
+	if pvcDataSourceKind != "PersistentVolumeClaim" {
+		return nil
+	}
+
+	// if the pvc is from a DV, it will have the following annotation
+	// cdi.kubevirt.io/createdForDataVolume
+	// and the value is the DV's UID
+	createdForDVUID, ok := pvc.Annotations[AnnCreatedForDataVolume]
+	if !ok || createdForDVUID == "" {
+		return nil
+	}
+
+	// list all DVs in the pvc's namespace and find the one with matching UID
+	dvList := &cdiv1.DataVolumeList{}
+	if err := c.List(ctx, dvList, client.InNamespace(pvc.Namespace)); err != nil {
+		return nil
+	}
+	for _, dv := range dvList.Items {
+		if string(dv.UID) == createdForDVUID {
+			return &dv
+		}
+	}
+	return nil
+}
+
+func GetHostCloneOriginalSourceDVSize(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) resource.Quantity {
+	// Get the datavolume associate with the source
+	dv := GetDVFromHostCloneSourcePVC(ctx, c, pvc)
+	size := resource.Quantity{}
+	if dv != nil {
+		size = dv.Spec.PVC.Resources.Requests[corev1.ResourceStorage]
+	}
+	return size
+}
