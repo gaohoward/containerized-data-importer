@@ -195,6 +195,60 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
+	if targetVolumeMode := cc.GetVolumeMode(claim); targetVolumeMode == corev1.PersistentVolumeFilesystem {
+		// It is possible when the source pvc has VolumMode 'block'
+		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
+		sourcePvc := &corev1.PersistentVolumeClaim{}
+		sourcePvcKey := client.ObjectKey{Namespace: p.Namespace, Name: p.SourceName}
+
+		if err := p.Client.Get(ctx, sourcePvcKey, sourcePvc); err != nil {
+			return nil, err
+		}
+
+		if claim.Spec.Resources.Requests != nil {
+			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			inflate := true
+			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+				// Get the datavolume associate with the source
+				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
+					if dv != nil {
+						if sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv); err == nil {
+							// If the source PVC is filesystem, just directly compare
+							targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+							if targetSize.Cmp(*sourceSize) >= 0 {
+								// the target size has enough space, not to inflate
+								inflate = false
+							}
+						} else {
+							inflate = false
+						}
+					} else {
+						// can't determine the overhead, assuming size is correct
+						inflate = false
+					}
+				} else {
+					inflate = false
+				}
+			} else {
+				// If the source PVC is block, we need to account for the overhead
+				if usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim); err == nil {
+					if usableSpace.Cmp(size) >= 0 {
+						inflate = false
+					}
+				} else {
+					inflate = false
+				}
+			}
+			if inflate {
+				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, size.Value(), &claim.Spec)
+				if err != nil {
+					return nil, err
+				}
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+			}
+		}
+	}
+
 	if err := p.Client.Create(ctx, claim); err != nil {
 		checkQuotaExceeded(p.Recorder, p.Owner, err)
 		return nil, err
