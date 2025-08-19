@@ -2138,35 +2138,44 @@ func sortEvents(events *corev1.EventList, usingPopulator bool, pvcPrimeName stri
 // UpdatePVCBoundContionFromEvents updates the bound condition annotations on the PVC based on recent events
 // This function can be used by both controller and populator packages to update PVC bound condition information
 func UpdatePVCBoundContionFromEvents(pvc *corev1.PersistentVolumeClaim, c client.Client, log logr.Logger) error {
+	log.Info("=== in UpdatePVCBoundContionFromEvents ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 	currentPvcCopy := pvc.DeepCopy()
 
 	anno := pvc.GetAnnotations()
 	if anno == nil {
+		log.Info("=== pvc doesn't have any anno, return", "pvc", pvc.Name, "ns", pvc.Namespace)
 		return nil
 	}
 
 	if IsBound(pvc) {
 		anno := pvc.GetAnnotations()
+		log.Info("pvc is bound, try delete some annos", "pvc", pvc.Name, "ns", pvc.Namespace, "annos", anno)
 		delete(anno, AnnBoundCondition)
 		delete(anno, AnnBoundConditionReason)
 		delete(anno, AnnBoundConditionMessage)
 
 		if !reflect.DeepEqual(currentPvcCopy, pvc) {
+			log.Info("=== pvc has changed, updating ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 			patch := client.MergeFrom(currentPvcCopy)
 			if err := c.Patch(context.TODO(), pvc, patch); err != nil {
+				log.Info("=== error patching pvc ===", "pvc", pvc.Name, "ns", pvc.Namespace, "err", err)
 				return err
 			}
 		}
 
+		log.Info("=== return nil ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 		return nil
 	}
 
 	if pvc.Status.Phase != corev1.ClaimPending {
+		log.Info("=== pvc status.phase is not pending, return ===", "pvc", pvc.Name, "ns", pvc.Namespace, "phase", pvc.Status.Phase)
 		return nil
 	}
 
 	// set bound condition by getting the latest event
 	events := &corev1.EventList{}
+
+	log.Info("=== collecting events")
 
 	err := c.List(context.TODO(), events,
 		client.InNamespace(pvc.GetNamespace()),
@@ -2181,10 +2190,13 @@ func UpdatePVCBoundContionFromEvents(pvc *corev1.PersistentVolumeClaim, c client
 	}
 
 	if len(events.Items) == 0 {
+		log.Info("=== got empty events ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 		return nil
 	}
 
 	pvcPrime, usingPopulator := anno[AnnPVCPrimeName]
+
+	log.Info("=== pvcPrime and usingPopulator ===", "anno key", AnnPVCPrimeName, "pvcPrime", pvcPrime, "usingPopulator", usingPopulator)
 
 	// Sort event lists by containing primeName substring and most recent timestamp
 	sortEvents(events, usingPopulator, pvcPrime)
@@ -2192,21 +2204,28 @@ func UpdatePVCBoundContionFromEvents(pvc *corev1.PersistentVolumeClaim, c client
 	boundMessage := ""
 	// check if prime name annotation exists
 	if usingPopulator {
+		log.Info("=== using populator ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 		// if we are using populators get the latest event from prime pvc
 		pvcPrime = fmt.Sprintf("[%s] : ", pvcPrime)
 
 		// if the first event does not contain a prime message, none will so return
 		primeIdx := strings.Index(events.Items[0].Message, pvcPrime)
+		log.Info("=== checking for prime message in event ===", "pvcPrime", pvcPrime, "ns", pvc.Namespace, "event", events.Items[0].Message)
 		if primeIdx == -1 {
 			log.V(1).Info("No bound message found, skipping bound condition update", "pvc", pvc.Name)
 			return nil
 		}
 		boundMessage = events.Items[0].Message[primeIdx+len(pvcPrime):]
+		log.Info("=== extracted bound message ===", "pvc", pvc.Name, "ns", pvc.Namespace, "boundMessage", boundMessage)
+
 	} else {
 		// if not using populators just get the latest event
 		boundMessage = events.Items[0].Message
+		log.Info("=== not to use populators ===", "boundMessage", boundMessage, "pvc", pvc.Name, "ns", pvc.Namespace)
+		log.Info("=== hmm, of not to use populators, should we update anno cdi.kubevirt.io/storage.usePopulator to false?")
 	}
 
+	log.Info("=== go patching anno of pvc ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 	// since we checked status of phase above, we know this is pending
 	anno[AnnBoundCondition] = "false"
 	anno[AnnBoundConditionReason] = "Pending"
@@ -2214,8 +2233,11 @@ func UpdatePVCBoundContionFromEvents(pvc *corev1.PersistentVolumeClaim, c client
 
 	patch := client.MergeFrom(currentPvcCopy)
 	if err := c.Patch(context.TODO(), pvc, patch); err != nil {
+		log.Info("=== error patching pvc ===", "pvc", pvc.Name, "ns", pvc.Namespace, "err", err)
 		return err
 	}
+
+	log.Info("=== patched pvc, return nil ===", "pvc", pvc.Name, "ns", pvc.Namespace)
 
 	return nil
 }

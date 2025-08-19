@@ -83,9 +83,11 @@ func RenderPvc(ctx context.Context, client client.Client, pvc *v1.PersistentVolu
 
 // renderPvcSpec creates a new PVC Spec based on either the dv.spec.pvc or dv.spec.storage section
 func renderPvcSpec(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
+	log.V(1).Info("*** rendering PVC spec", "namespace", dv.Namespace, "name", dv.Name)
 	if dv.Spec.PVC != nil {
 		return dv.Spec.PVC.DeepCopy(), nil
 	} else if dv.Spec.Storage != nil {
+		log.V(1).Info("*** rendering PVC spec from storage", "namespace", dv.Namespace, "name", dv.Name)
 		return pvcFromStorage(client, recorder, log, dv, pvc)
 	}
 
@@ -93,16 +95,22 @@ func renderPvcSpec(client client.Client, recorder record.EventRecorder, log logr
 }
 
 func pvcFromStorage(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
+	log.V(1).Info("*** in pvcFromStorage()", "namespace", dv.Namespace, "name", dv.Name, "pvc", pvc)
+
 	var pvcSpec *v1.PersistentVolumeClaimSpec
 
 	isWebhookRenderingEnabled, err := featuregates.IsWebhookPvcRenderingEnabled(client)
 	if err != nil {
 		return nil, err
 	}
+	log.V(1).Info("***", "isWebhookEnabled", isWebhookRenderingEnabled)
 
 	shouldRender := !isWebhookRenderingEnabled || dv.Labels[common.PvcApplyStorageProfileLabel] != "true"
 
+	log.V(1).Info("***", "shouldRender", shouldRender)
+
 	if pvc == nil {
+		log.V(1).Info("*** pvc is nil, copy and render pvcSpec")
 		pvcSpec = copyStorageAsPvc(dv.Spec.Storage)
 		if shouldRender {
 			if err := renderPvcSpecVolumeModeAndAccessModesAndStorageClass(client, recorder, &log, dv, pvcSpec, dv.Spec.ContentType); err != nil {
@@ -115,6 +123,8 @@ func pvcFromStorage(client client.Client, recorder record.EventRecorder, log log
 
 	if shouldRender {
 		isClone := dv.Spec.Source.PVC != nil || dv.Spec.Source.Snapshot != nil
+		log.V(1).Info("*** render pvc spec vol size", "isclone", isClone)
+
 		if err := renderPvcSpecVolumeSize(client, pvcSpec, isClone, &log); err != nil {
 			return nil, err
 		}
@@ -281,10 +291,12 @@ func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeC
 
 	// Storage size can be empty when cloning
 	if !found {
+		log.Info("*** pvc spec storage size not found", "isClone", isClone)
 		if !isClone {
 			return errors.Errorf("PVC Spec is not valid - missing storage size")
 		}
 		setRequestedVolumeSize(pvcSpec, resource.Quantity{})
+		log.Info("*** set pvc spec volume size and return")
 		return nil
 	}
 
@@ -298,7 +310,10 @@ func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeC
 		return err
 	}
 
+	log.Info("*** after inflating size", "requestedSize", requestedSize)
+
 	if scName := pvcSpec.StorageClassName; scName != nil {
+		log.Info("*** found storage class", "name", *scName)
 		storageProfile := &cdiv1.StorageProfile{}
 		if err := client.Get(context.TODO(), types.NamespacedName{Name: *scName}, storageProfile); err == nil {
 			if val, exists := storageProfile.Annotations[cc.AnnMinimumSupportedPVCSize]; exists {
@@ -315,6 +330,7 @@ func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeC
 		}
 	}
 
+	log.Info("*** finally set pvc spec volume size", "requestedSize", requestedSize)
 	setRequestedVolumeSize(pvcSpec, requestedSize)
 
 	return nil

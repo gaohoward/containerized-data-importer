@@ -195,6 +195,9 @@ func NewClonePopulator(
 	installerLabels map[string]string,
 	publicKey *rsa.PublicKey,
 ) (controller.Controller, error) {
+
+	log.V(1).Info("Creating-Clone-Populator", "clonerImage", clonerImage, "pullPolicy", pullPolicy)
+
 	client := mgr.GetClient()
 	reconciler := &ClonePopulatorReconciler{
 		ReconcilerBase: ReconcilerBase{
@@ -243,19 +246,23 @@ func NewClonePopulator(
 		return nil, err
 	}
 
+	log.Info("Clone Populator created successfully")
+
 	return clonePopulator, nil
 }
 
 // Reconcile the reconcile loop for the PVC with DataSourceRef of VolumeCloneSource kind
 func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	log := r.log.WithValues("PVC", req.NamespacedName)
-	log.V(1).Info("reconciling Clone Source PVC")
+	log.V(1).Info("=== reconciling Clone Source PVC (someone (like snapshot-clone-controller) created it)")
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.client.Get(ctx, req.NamespacedName, pvc); err != nil {
 		if k8serrors.IsNotFound(err) {
+			log.V(1).Info("=== pvc not found")
 			return reconcile.Result{}, nil
 		}
+		log.Error(err, "=== failed to get pvc")
 		return reconcile.Result{}, err
 	}
 
@@ -264,9 +271,13 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, nil
 	}
 
+	log.V(1).Info("=== updating pvc bound condition from events")
+
 	if err := cc.UpdatePVCBoundContionFromEvents(pvc, r.client, r.log); err != nil {
 		return reconcile.Result{}, err
 	}
+
+	log.V(1).Info("=== after updating pvc bound condition from events", "anno", pvc.GetAnnotations())
 
 	hasFinalizer := cc.HasFinalizer(pvc, cloneFinalizer)
 	isBound := cc.IsBound(pvc)
@@ -277,19 +288,28 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 		"isBound", isBound, "isDeleted", isDeleted, "isSucceeded", isSucceeded)
 
 	if !isDeleted && !isSucceeded {
+		log.V(1).Info("*** go reconciling pending pvc...")
 		return r.reconcilePending(ctx, log, pvc, isBound)
 	}
 
 	if hasFinalizer {
+		log.V(1).Info("=== reconcile done, pvc has finalizer")
 		return r.reconcileDone(ctx, log, pvc)
 	}
+
+	log.V(1).Info("Nothing to reconcile, the pvc is good", pvc, pvc)
 
 	return reconcile.Result{}, nil
 }
 
 func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, statusOnly bool) (reconcile.Result, error) {
+
+	log.V(1).Info("=== reconciling pending PVC", "status only?", statusOnly, "pvc", pvc)
+
 	ready, _, err := claimReadyForPopulation(ctx, r.client, pvc)
+
 	if err != nil {
+		log.V(1).Info("=== failed to check claim readiness", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -298,22 +318,30 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
+	log.V(1).Info("=== getting volumeclonesource", "pvc", pvc)
+
 	vcs, err := r.getVolumeCloneSource(ctx, log, pvc)
 	if err != nil {
+		log.V(1).Info("=== failed to get volumeCloneSource", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
 	if vcs == nil {
-		log.V(3).Info("dataSourceRef does not exist, exiting")
+		log.V(3).Info("volumeclonesource not found, exiting")
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
-	if err = r.validateCrossNamespace(pvc, vcs); err != nil {
+	log.V(1).Info("=== vcs got, check cross namespace")
+
+	if err = r.validateCrossNamespace(pvc, vcs, log); err != nil {
+		log.V(1).Info("=== failed to validate cross-namespace", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
+	log.V(1).Info("=== vcs validated, getting clone strategy")
 	csr, err := r.getCloneStrategy(ctx, log, pvc, vcs)
 	if err != nil {
+		log.V(1).Info("=== failed to get clone strategy", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -323,8 +351,10 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{RequeueAfter: 5 * time.Second}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
+	log.V(1).Info("=== init target claim (adding annotations)", "csr name", csr.Strategy)
 	updated, err := r.initTargetClaim(ctx, log, pvc, vcs, csr)
 	if err != nil {
+		log.V(1).Info("=== failed to init target claim", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -333,6 +363,8 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		// phase will be set to pending by initTargetClaim if unset
 		return reconcile.Result{}, nil
 	}
+
+	log.V(1).Info("=== time to plan and execute", "target pvc", pvc, "source", vcs)
 
 	args := &clone.PlanArgs{
 		Log:         log,
@@ -364,33 +396,46 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
-	log.V(3).Info("created phases", "num", len(phases))
+	log.V(3).Info("=== created phases", "num", len(phases))
+	for i, p := range phases {
+		log.V(1).Info("=== phase", "index", i, "name", p.Name())
+	}
 
 	var statusResults []*clone.PhaseStatus
+
+	log.V(1).Info("=== now going through each phase", "statusOnly", statusOnly)
 	for _, p := range phases {
+		log.V(1).Info("=== begin phase", "name", p.Name())
 		var result *reconcile.Result
 		var err error
 		var progress string
 		if !statusOnly {
+			log.V(1).Info("=== reconciling phase because not statusonly", "name", p.Name())
 			result, err = p.Reconcile(ctx)
 			if err != nil {
+				log.V(1).Info("=== failed to reconcile phase", "name", p.Name(), "error", err)
 				return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 			}
 		}
 
 		if sr, ok := p.(clone.StatusReporter); ok {
+			log.V(1).Info("=== this phase is a statusReporter, get status", "name", p.Name())
 			ps, err := sr.Status(ctx)
 			if err != nil {
+				log.V(1).Info("=== failed to get phase status", "name", p.Name(), "error", err)
 				return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 			}
 			progress = ps.Progress
+			log.V(1).Info("=== appending statusresults", "name", p.Name(), "progress", progress)
 			statusResults = append(statusResults, ps)
 		}
 
 		if result != nil {
 			log.V(1).Info("currently in phase, returning", "name", p.Name(), "progress", progress)
+			log.V(1).Info("=== phase result", "result", result)
 			return *result, r.updateClonePhase(ctx, log, pvc, p.Name(), statusResults)
 		}
+		log.V(1).Info("done this phase, next(if any)", "current name", p.Name(), "progress", progress)
 	}
 
 	log.V(3).Info("executed all phases, setting phase to Succeeded")
@@ -398,17 +443,21 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 	return reconcile.Result{}, r.updateClonePhaseSucceeded(ctx, log, pvc, statusResults)
 }
 
-func (r *ClonePopulatorReconciler) validateCrossNamespace(pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource) error {
+func (r *ClonePopulatorReconciler) validateCrossNamespace(pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource, log logr.Logger) error {
+	log.V(1).Info("=== validating cross-namespace", "pvcNamespace", pvc.Namespace, "vcsNamespace", vcs.Namespace)
 	if pvc.Namespace == vcs.Namespace {
 		return nil
 	}
 
+	log.V(1).Info("=== not in same ns, checking annotations", "annokey", AnnDataSourceNamespace)
+
 	anno, ok := pvc.Annotations[AnnDataSourceNamespace]
+
 	if ok && anno == vcs.Namespace {
+		log.V(1).Info("=== found matching annotation, same as vcs ns, validating tokens")
 		if err := r.multiTokenValidator.ValidatePopulator(vcs, pvc); err != nil {
 			return err
 		}
-
 		return nil
 	}
 
@@ -436,19 +485,25 @@ func (r *ClonePopulatorReconciler) reconcileDone(ctx context.Context, log logr.L
 func (r *ClonePopulatorReconciler) initTargetClaim(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource, csr *clone.ChooseStrategyResult) (bool, error) {
 	claimCpy := pvc.DeepCopy()
 	clone.AddCommonClaimLabels(claimCpy)
+	log.Info("*** added common labels, set clone strategy", "strategy", csr.Strategy)
 	setSavedCloneStrategy(claimCpy, csr.Strategy)
 	if claimCpy.Annotations[AnnClonePhase] == "" {
+		log.Info("*** setting clone phase to pending as it's empty")
 		cc.AddAnnotation(claimCpy, AnnClonePhase, clone.PendingPhaseName)
 	}
 	if claimCpy.Annotations[AnnCloneFallbackReason] == "" && csr.FallbackReason != nil {
+		log.Info("*** setting clone fallback reason", "reason", *csr.FallbackReason)
 		cc.AddAnnotation(claimCpy, AnnCloneFallbackReason, *csr.FallbackReason)
 	}
+	log.Info("*** added finalizer", "finalizer", cloneFinalizer)
 	cc.AddFinalizer(claimCpy, cloneFinalizer)
 
 	if !apiequality.Semantic.DeepEqual(pvc, claimCpy) {
 		if err := r.client.Update(ctx, claimCpy); err != nil {
 			return false, err
 		}
+
+		log.Info("*** successfully updated pvc's annos and labels")
 
 		return true, nil
 	}
@@ -554,7 +609,7 @@ func (r *ClonePopulatorReconciler) getVolumeCloneSource(ctx context.Context, log
 	ns := pvc.Namespace
 	anno, ok := pvc.Annotations[AnnDataSourceNamespace]
 	if ok {
-		log.V(3).Info("found datasource namespace annotation", "namespace", ns)
+		log.V(3).Info("found datasource namespace annotation", "namespace", anno, "pvc ns", ns)
 		ns = anno
 	} else if pvc.Spec.DataSourceRef.Namespace != nil {
 		ns = *pvc.Spec.DataSourceRef.Namespace
@@ -567,14 +622,19 @@ func (r *ClonePopulatorReconciler) getVolumeCloneSource(ctx context.Context, log
 		},
 	}
 
+	log.V(1).Info("=== retrieving volumeCloneSource", "name", obj.Name, "namespace", obj.Namespace)
+
 	if err := r.client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 		if k8serrors.IsNotFound(err) {
+			log.V(1).Info("=== volumeCloneSource not found")
 			return nil, nil
 		}
 
+		log.V(1).Info("=== failed to get volumeCloneSource", "error", err)
 		return nil, err
 	}
 
+	log.V(1).Info("=== successfully retrieved volumeCloneSource", "objspec", obj.Spec)
 	return obj, nil
 }
 

@@ -42,41 +42,61 @@ func (p *SnapshotClonePhase) Name() string {
 
 // Reconcile ensures a snapshot is created correctly
 func (p *SnapshotClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, error) {
+	p.Log.Info("=== reconciling snapshot clone phase", "name", p.Name())
+
 	pvc := &corev1.PersistentVolumeClaim{}
+	p.Log.Info("=== finding desired PVC", "name", p.DesiredClaim.Name, "namespace", p.Namespace)
 	exists, err := getResource(ctx, p.Client, p.Namespace, p.DesiredClaim.Name, pvc)
 	if err != nil {
+		p.Log.Error(err, "=== failed to get PVC", "name", p.DesiredClaim.Name)
 		return nil, err
 	}
 
 	if !exists {
+		p.Log.Info("=== pvc not exists, finding snapshot first")
 		snapshot := &snapshotv1.VolumeSnapshot{}
 		exists, err := getResource(ctx, p.Client, p.Namespace, p.SourceName, snapshot)
 		if err != nil {
+			p.Log.Error(err, "=== failed to get snapshot", "name", p.SourceName, "namespace", p.Namespace)
 			return nil, err
 		}
 
 		if !exists {
+			p.Log.Info("===== source snapshot does not exist")
 			return nil, fmt.Errorf("source snapshot does not exist")
 		}
 
+		p.Log.Info("=== found source snapshot", "name", p.SourceName, "namespace", p.Namespace)
+
 		if !cc.IsSnapshotReady(snapshot) {
+			p.Log.Info("=== snapshot not ready", "name", p.SourceName, "namespace", p.Namespace)
 			return &reconcile.Result{}, nil
 		}
 
+		p.Log.Info("=== creating PVC(tmp-source) from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 		pvc, err = p.createClaim(ctx, snapshot)
 		if err != nil {
+			p.Log.Error(err, "=== failed to create PVC from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 			return nil, err
 		}
+		p.Log.Info("=== created PVC(tmp-source) from snapshot", "pvc name", pvc.Name, "namespace", pvc.Namespace)
 	}
 
+	p.Log.Info("=== checking PVC bound or wffc", "pvc", pvc)
+
 	done, err := isClaimBoundOrWFFC(ctx, p.Client, pvc)
+
 	if err != nil {
+		p.Log.Error(err, "=== failed to check PVC bound or wffc", "pvc", pvc)
 		return nil, err
 	}
 
 	if !done {
+		p.Log.Info("=== pvc not bound or its sc bind mode is not wffc", "pvc", pvc)
 		return &reconcile.Result{}, nil
 	}
+
+	p.Log.V(1).Info("=== returning all nils (bound)", "pvc", pvc)
 
 	return nil, nil
 }
@@ -111,6 +131,8 @@ func (p *SnapshotClonePhase) createClaim(ctx context.Context, snapshot *snapshot
 		checkQuotaExceeded(p.Recorder, p.Owner, err)
 		return nil, err
 	}
+
+	p.Log.Info("=== created PVC tmp-source from snapshot", "name", claim.Name, "namespace", claim.Namespace)
 
 	return claim, nil
 }

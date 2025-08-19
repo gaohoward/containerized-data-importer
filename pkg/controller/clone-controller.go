@@ -105,19 +105,23 @@ func NewCloneController(mgr manager.Manager,
 	if err := addCloneControllerWatches(mgr, cloneController); err != nil {
 		return nil, err
 	}
+	log.Info("+++ Clone controller created")
 	return cloneController, nil
 }
 
 // addCloneControllerWatches sets up the watches used by the clone controller.
 func addCloneControllerWatches(mgr manager.Manager, cloneController controller.Controller) error {
 	// Setup watches
+	// Watch for changes to PVCs
 	if err := cloneController.Watch(source.Kind(mgr.GetCache(), &corev1.PersistentVolumeClaim{}, &handler.TypedEnqueueRequestForObject[*corev1.PersistentVolumeClaim]{})); err != nil {
 		return err
 	}
+	// watch pods that owned by pvcs
 	if err := cloneController.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, handler.TypedEnqueueRequestForOwner[*corev1.Pod](
 		mgr.GetScheme(), mgr.GetClient().RESTMapper(), &corev1.PersistentVolumeClaim{}, handler.OnlyControllerOwner()))); err != nil {
 		return err
 	}
+	// watch pods that has cdi.kubevirt.io/storage.ownerRef annotation
 	if err := cloneController.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, handler.TypedEnqueueRequestsFromMapFunc[*corev1.Pod](
 		func(ctx context.Context, obj *corev1.Pod) []reconcile.Request {
 			target, ok := obj.GetAnnotations()[AnnOwnerRef]
@@ -144,14 +148,18 @@ func addCloneControllerWatches(mgr manager.Manager, cloneController controller.C
 }
 
 func (r *CloneReconciler) shouldReconcile(pvc *corev1.PersistentVolumeClaim, log logr.Logger) bool {
-	return checkPVC(pvc, cc.AnnCloneRequest, log) &&
+	r.log.Info("+++ shouldReconcile called", "pvc", pvc)
+	should := checkPVC(pvc, cc.AnnCloneRequest, log) &&
 		!metav1.HasAnnotation(pvc.ObjectMeta, cc.AnnCloneOf) &&
 		isBound(pvc, log)
+	r.log.Info("+++ shouldReconcile returning", "should", should, "pvc", pvc)
+	return should
 }
 
 // Reconcile the reconcile loop for host assisted clone pvc.
 func (r *CloneReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	// Get the PVC.
+	r.log.Info("+++ begin clone-controller Reconcile cycle", "req", req)
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.client.Get(ctx, req.NamespacedName, pvc); err != nil {
 		if k8serrors.IsNotFound(err) {
@@ -161,13 +169,17 @@ func (r *CloneReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 	}
 
 	log := r.log.WithValues("PVC", req.NamespacedName)
-	log.V(1).Info("reconciling Clone PVCs")
+	log.V(1).Info("reconciling Clone PVCs", "pvc namespace", pvc.Namespace, "pvc name", pvc.Name)
 
+	log.Info("checking if pvc has annotation", "annotation", cc.AnnCloneRequest)
 	if checkPVC(pvc, cc.AnnCloneRequest, log) {
 		if err := cc.UpdatePVCBoundContionFromEvents(pvc, r.client, log); err != nil {
+			log.Info("Error updating pvc bound condition from events, will retry", "error", err)
 			return reconcile.Result{}, err
 		}
 	}
+
+	log.Info("checking if pvc has deletion timestamp or should not be reconciled")
 
 	if pvc.DeletionTimestamp != nil || !r.shouldReconcile(pvc, log) {
 		log.V(1).Info("Should not reconcile this PVC",
@@ -177,15 +189,22 @@ func (r *CloneReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 			"has finalizer?", cc.HasFinalizer(pvc, cloneSourcePodFinalizer))
 		if cc.HasFinalizer(pvc, cloneSourcePodFinalizer) || pvc.DeletionTimestamp != nil {
 			// Clone completed, remove source pod and/or finalizer
+			log.Info("Clone done, clean up pod and finalizer", "pvc", pvc)
 			if err := r.cleanup(pvc, log); err != nil {
+				log.Info("clone complete, but error during cleanup, will retry", "error", err)
 				return reconcile.Result{}, err
 			}
+			log.Info("cleanup complete")
 		}
+		log.Info("reconcile done for this PVC", "pvc", pvc)
 		return reconcile.Result{}, nil
 	}
 
+	log.Info("=== Now call wait target pod", "pvc", pvc)
 	ready, err := r.waitTargetPodRunningOrSucceeded(pvc, log)
+
 	if err != nil {
+		log.Info("=== error in call waitingTargetPod, requeue", "err", err)
 		return reconcile.Result{}, errors.Wrap(err, "error ensuring target upload pod running")
 	}
 
@@ -194,69 +213,116 @@ func (r *CloneReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		return reconcile.Result{}, nil
 	}
 
+	log.Info("=== target pod ready or succeeded, now find source pod", "pvc", pvc)
+
 	sourcePod, err := r.findCloneSourcePod(pvc)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
+	log.Info("=== found source pod", "sourcePod", sourcePod, "pvc", pvc)
+
 	_, nameExists := pvc.Annotations[cc.AnnCloneSourcePod]
+
+	log.Info("=== check if anno exists", "anno", cc.AnnCloneSourcePod, "nameExists", nameExists, "sourcePod", sourcePod, "pvc", pvc)
+
 	if !nameExists && sourcePod == nil {
-		pvc.Annotations[cc.AnnCloneSourcePod] = cc.CreateCloneSourcePodName(pvc)
+		log.Info("=== pod anno not exist and sourcePod is nil")
+		value := cc.CreateCloneSourcePodName(pvc)
+		pvc.Annotations[cc.AnnCloneSourcePod] = value
+
+		log.Info("=== set pvc anno", "key", cc.AnnCloneSourcePod, "value", value)
 
 		// add finalizer before creating clone source pod
 		cc.AddFinalizer(pvc, cloneSourcePodFinalizer)
 
+		log.Info("=== added finalizer to pvc", "finalizer", cloneSourcePodFinalizer)
+
 		if err := r.updatePVC(pvc); err != nil {
+			log.Info("=== failed to update pvc, return reconcile", "err", err)
 			return reconcile.Result{}, err
 		}
 
+		log.Info("=== return for reconcile again")
 		// will reconcile again after PVC update notification
 		return reconcile.Result{}, nil
 	}
 
+	log.Info("=== Now call reconcileSourcePod...", "is pod nil", sourcePod)
+
 	if requeueAfter, err := r.reconcileSourcePod(ctx, sourcePod, pvc, log); requeueAfter != 0 || err != nil {
+		log.Info("failed reconcile source pod, requeue", "requeueAfter", requeueAfter, "err", err)
 		return reconcile.Result{RequeueAfter: requeueAfter}, err
 	}
 
+	log.Info("=== reconcileSourcePod done, ensure cert secret...")
 	if err := r.ensureCertSecret(sourcePod, pvc); err != nil {
 		return reconcile.Result{}, err
 	}
 
+	log.Info("=== ensureCertSecret done, update pvc from pod...")
 	if err := r.updatePvcFromPod(sourcePod, pvc, log); err != nil {
 		return reconcile.Result{}, err
 	}
+
+	log.Info("=== updatePvcFromPod done, reconcile complete for this pvc", "pvc", pvc)
 	return reconcile.Result{}, nil
 }
 
 func (r *CloneReconciler) reconcileSourcePod(ctx context.Context, sourcePod *corev1.Pod, targetPvc *corev1.PersistentVolumeClaim, log logr.Logger) (time.Duration, error) {
+	log.Info("in reconcileSourcePod")
 	if sourcePod == nil {
+		log.Info("pod is nil, get clone request source pvc")
 		sourcePvc, err := r.getCloneRequestSourcePVC(targetPvc)
+
 		if err != nil {
+			log.Info("failed to get source pvc, return", "err", err)
 			return 0, err
 		}
 
+		log.Info("checking of source pvc is populated", "sourcePvc", sourcePvc)
+
 		sourcePopulated, err := cc.IsPopulated(sourcePvc, r.client)
+
 		if err != nil {
+			log.Info("failed to check population", "err", err)
 			return 0, err
 		}
+
+		log.Info("populated?", "value", sourcePopulated)
+
 		if !sourcePopulated {
+			log.Info("not populated, return with 2 seconds")
 			return 2 * time.Second, nil
 		}
 
+		log.Info("validating source and target", "source", sourcePvc, "target", targetPvc)
+
 		if err := r.validateSourceAndTarget(ctx, sourcePvc, targetPvc); err != nil {
+			log.Info("validating error and return", "err", err)
 			return 0, err
 		}
 
+		log.Info("getting pods", "name", sourcePvc.Name, "ns", sourcePvc.Namespace)
 		pods, err := cc.GetPodsUsingPVCs(ctx, r.client, sourcePvc.Namespace, sets.New(sourcePvc.Name), true)
 		if err != nil {
+			log.Info("failed to get pods", "err", err)
 			return 0, err
 		}
 
 		if len(pods) > 0 {
+			log.Info("=== got some pods", "len", len(pods))
+
+			log.Info("get event source", "target", targetPvc)
 			es, err := cc.GetAnnotatedEventSource(ctx, r.client, targetPvc)
+
 			if err != nil {
+				log.Info("error getting evet source", "err", err)
 				return 0, err
 			}
+
+			log.Info("got the event source", "es", es)
+
 			for _, pod := range pods {
 				r.log.V(1).Info("can't create clone source pod, pvc in use by other pod",
 					"namespace", sourcePvc.Namespace, "name", sourcePvc.Name, "pod", pod.Name)
@@ -265,6 +331,8 @@ func (r *CloneReconciler) reconcileSourcePod(ctx context.Context, sourcePod *cor
 			}
 			return 2 * time.Second, nil
 		}
+
+		log.Info("** Now create clone source pod", "targetPvc", targetPvc, "sourcePvc", sourcePvc, "image", r.image)
 
 		sourcePod, err := r.CreateCloneSourcePod(r.image, r.pullPolicy, targetPvc, log)
 		// Check if pod has failed and, in that case, record an event with the error
@@ -368,9 +436,12 @@ func (r *CloneReconciler) updatePVC(pvc *corev1.PersistentVolumeClaim) error {
 }
 
 func (r *CloneReconciler) waitTargetPodRunningOrSucceeded(pvc *corev1.PersistentVolumeClaim, log logr.Logger) (bool, error) {
+
+	log.Info("in waitTargetPodRunningOrSucceeded", "pvc", pvc)
 	rs, ok := pvc.Annotations[cc.AnnPodReady]
+
 	if !ok {
-		log.V(3).Info("clone target pod not ready")
+		log.V(3).Info("clone target pod not ready because annotation not found, need retry", "annotation", cc.AnnPodReady)
 		return false, nil
 	}
 
@@ -379,18 +450,34 @@ func (r *CloneReconciler) waitTargetPodRunningOrSucceeded(pvc *corev1.Persistent
 		return false, errors.Wrapf(err, "error parsing %s annotation", cc.AnnPodReady)
 	}
 
-	return ready || podSucceededFromPVC(pvc), nil
+	log.Info("is the pvc annotation ready?", "ready", ready, "value", rs)
+
+	log.Info("checking if pod succeeded from pvc", "ann key", cc.AnnPodPhase, "pvc", pvc)
+	result := ready || podSucceededFromPVC(pvc)
+
+	log.Info("returning", "result", result)
+	return result, nil
 }
 
 func (r *CloneReconciler) findCloneSourcePod(pvc *corev1.PersistentVolumeClaim) (*corev1.Pod, error) {
+	r.log.Info("in Finding clone source pod for pvc", "pvc", pvc)
+
 	isCloneRequest, sourceNamespace, _ := ParseCloneRequestAnnotation(pvc)
+
+	r.log.Info("parsed clone request anno", "isCloneRequest", isCloneRequest, "sourceNamespace", sourceNamespace)
+
 	if !isCloneRequest {
+		r.log.Info("pvc doesnot have cloneRequest anno, return nil")
 		return nil, nil
 	}
+
 	cloneSourcePodName, exists := pvc.Annotations[cc.AnnCloneSourcePod]
+
+	r.log.Info("checking pvc clone source pod", "anno", cc.AnnCloneSourcePod, "name", cloneSourcePodName, "exists", exists)
 	if !exists {
 		// fallback to legacy name, to find any pod that still might be running after upgrade
 		cloneSourcePodName = cc.CreateCloneSourcePodName(pvc)
+		r.log.Info("pvc missing clone source pod anno, using legacy name", "name", cloneSourcePodName)
 	}
 
 	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
@@ -398,9 +485,12 @@ func (r *CloneReconciler) findCloneSourcePod(pvc *corev1.PersistentVolumeClaim) 
 			cc.CloneUniqueID: cloneSourcePodName,
 		},
 	})
+
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating label selector")
 	}
+
+	r.log.Info("listing pods", "namespace", sourceNamespace, "selector", selector.String())
 
 	podList := &corev1.PodList{}
 	if err := r.client.List(context.TODO(), podList, &client.ListOptions{Namespace: sourceNamespace, LabelSelector: selector}); err != nil {
@@ -408,13 +498,16 @@ func (r *CloneReconciler) findCloneSourcePod(pvc *corev1.PersistentVolumeClaim) 
 	}
 
 	if len(podList.Items) > 1 {
+		r.log.Info("multiple source pods found for clone pvc, return", "pvc", pvc, "pods", podList.Items)
 		return nil, errors.Errorf("multiple source pods found for clone PVC %s/%s", pvc.Namespace, pvc.Name)
 	}
 
 	if len(podList.Items) == 0 {
+		r.log.Info("no source pod found for clone pvc, return", "pvc", pvc)
 		return nil, nil
 	}
 
+	r.log.Info("found source pod for clone pvc", "pvc", pvc, "pod", podList.Items[0])
 	return &podList.Items[0], nil
 }
 
@@ -789,7 +882,9 @@ func ValidateCanCloneSourceAndTargetSpec(ctx context.Context, c client.Client, s
 	}
 
 	if !permissive && sourceUsableSpace.Cmp(targetUsableSpace) > 0 {
-		return errors.New("target resources requests storage size is smaller than the source")
+		return fmt.Errorf("target resources requests storage size is smaller than the source: %s, target: %s, sourcePVC: %s, targetPVC: %s",
+			sourceUsableSpace.String(), targetUsableSpace.String(), sourcePvc.Name, targetPvc.Name)
+		// return errors.New("target resources requests storage size is smaller than the source")
 	}
 
 	// Can clone.

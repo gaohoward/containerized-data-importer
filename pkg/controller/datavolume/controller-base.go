@@ -462,7 +462,10 @@ type dvController interface {
 
 func (r *ReconcilerBase) reconcile(ctx context.Context, req reconcile.Request, dvc dvController) (reconcile.Result, error) {
 	log := r.log.WithValues("DataVolume", req.NamespacedName)
+	log.V(1).Info("***base Reconciling DataVolume", "dvc", dvc)
 	syncRes, syncErr := dvc.sync(log, req)
+	log.V(1).Info("***base, dvc sync done", "syncRes", syncRes, "syncErr", syncErr)
+
 	res, err := r.updateStatus(req, syncRes.phaseSync, dvc)
 	if syncErr != nil {
 		err = syncErr
@@ -470,12 +473,14 @@ func (r *ReconcilerBase) reconcile(ctx context.Context, req reconcile.Request, d
 	if syncRes.result != nil {
 		res = *syncRes.result
 	}
+	log.V(1).Info("***base, dvc reconcile done", "result", res, "err", err)
 	return res, err
 }
 
 type dvSyncStateFunc func(*dvSyncState) error
 
 func (r *ReconcilerBase) syncCommon(log logr.Logger, req reconcile.Request, cleanup, prepare dvSyncStateFunc) (dvSyncState, error) {
+	log.V(1).Info("*** syncCommon", "name", req.Name, "namespace", req.Namespace)
 	syncState, err := r.syncDvPvcState(log, req, cleanup, prepare)
 	if err == nil {
 		err = r.syncUpdate(log, &syncState)
@@ -484,9 +489,11 @@ func (r *ReconcilerBase) syncCommon(log logr.Logger, req reconcile.Request, clea
 }
 
 func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, cleanup, prepare dvSyncStateFunc) (dvSyncState, error) {
+	log.V(1).Info("*** syncDvPvcState", "name", req.Name, "namespace", req.Namespace)
 	syncState := dvSyncState{}
 	dv, err := r.getDataVolume(req.NamespacedName)
 	if dv == nil || err != nil {
+		log.V(1).Info("*** unable to get DataVolume", "namespacedName", req.NamespacedName, "err", err)
 		syncState.result = &reconcile.Result{}
 		return syncState, err
 	}
@@ -494,29 +501,39 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 	syncState.dvMutated = dv.DeepCopy()
 	syncState.pvc, err = r.getPVC(req.NamespacedName)
 	if err != nil {
+		log.V(1).Info("*** unable to get PVC", "namespacedName", req.NamespacedName, "err", err)
 		return syncState, err
 	}
+	log.V(1).Info("*** got pvc", "pvc", syncState.pvc)
 
 	if cleanup != nil {
+		log.V(1).Info("*** cleaning up", "namespacedName", req.NamespacedName)
 		if err := cleanup(&syncState); err != nil {
+			log.V(1).Info("*** failed to cleanup", "namespacedName", req.NamespacedName, "err", err)
 			return syncState, err
 		}
 	}
 
 	if dv.DeletionTimestamp != nil {
-		log.Info("DataVolume marked for deletion")
+		log.V(1).Info("*** DataVolume marked for deletion")
 		syncState.result = &reconcile.Result{}
 		return syncState, nil
 	}
 
 	if prepare != nil {
+		log.V(1).Info("*** preparing sync state", "namespacedName", req.NamespacedName)
 		if err := prepare(&syncState); err != nil {
 			return syncState, err
 		}
 	}
 
+	log.V(1).Info("*** rendering PVC spec")
 	syncState.pvcSpec, err = renderPvcSpec(r.client, r.recorder, log, syncState.dvMutated, syncState.pvc)
+
 	if err != nil {
+
+		log.V(1).Info("*** we got an error", "err", err)
+
 		if syncErr := r.syncDataVolumeStatusPhaseWithEvent(&syncState, cdiv1.PhaseUnset, nil,
 			Event{corev1.EventTypeWarning, cc.ErrClaimNotValid, err.Error()}); syncErr != nil {
 			log.Error(syncErr, "failed to sync DataVolume status with event")
@@ -528,10 +545,13 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 		return syncState, err
 	}
 
+	log.V(1).Info("*** checking if CDIPopulator should be used")
 	syncState.usePopulator, err = r.shouldUseCDIPopulator(&syncState)
 	if err != nil {
 		return syncState, err
 	}
+	log.V(1).Info("*** result", "should use populator", syncState.usePopulator)
+
 	updateDataVolumeUseCDIPopulator(&syncState)
 
 	if err := r.handleStaticVolume(&syncState, log); err != nil || syncState.result != nil {
@@ -547,6 +567,7 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 	}
 
 	if syncState.pvc != nil {
+		log.V(1).Info("*** the pvc in syncState not nil", "namespace", syncState.pvc.Namespace, "name", syncState.pvc.Name)
 		if err := r.validatePVC(dv, syncState.pvc); err != nil {
 			return syncState, err
 		}
@@ -893,6 +914,9 @@ func (r *ReconcilerBase) updateDataVolumeStatusPhaseWithEvent(
 }
 
 func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPhaseSync, dvc dvController) (reconcile.Result, error) {
+	log := r.log.WithValues("request", req)
+	log.V(1).Info("***base updating status for dvc")
+
 	result := reconcile.Result{}
 	dv, err := r.getDataVolume(req.NamespacedName)
 	if dv == nil || err != nil {
@@ -902,11 +926,16 @@ func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPh
 	dataVolumeCopy := dv.DeepCopy()
 
 	pvc, err := r.getPVC(req.NamespacedName)
+
+	log.V(1).Info("***base found pvc", "pvc", pvc, "err", err)
+
 	if err != nil {
+		log.V(1).Info("***base found pvc but error, return result", "pvc", pvc, "err", err)
 		return reconcile.Result{}, err
 	}
 
 	if phaseSync != nil {
+		log.V(1).Info("***base updating phase sync", "phaseSync", phaseSync)
 		err = r.updateDataVolumeStatusPhaseSync(phaseSync, dv, dataVolumeCopy, pvc)
 		return reconcile.Result{}, err
 	}
@@ -914,64 +943,90 @@ func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPh
 	curPhase := dataVolumeCopy.Status.Phase
 	var event Event
 
+	log.V(1).Info("*** base updating status phase...")
+
 	if shouldSetDataVolumePending(pvc, dataVolumeCopy) {
+		log.V(1).Info("*** base setting status phase to pending")
 		dataVolumeCopy.Status.Phase = cdiv1.Pending
 	} else if pvc != nil {
+		log.V(1).Info("*** pvc exists", "claimName", pvc.Name)
 		dataVolumeCopy.Status.ClaimName = pvc.Name
 
 		phase := pvc.Annotations[cc.AnnPodPhase]
+
+		log.V(1).Info("*** pvc pod anno phase is", "phase", phase)
+
 		requiresWork, err := r.pvcRequiresWork(pvc, dataVolumeCopy)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
+		log.V(1).Info("*** pvc require work?", "require", requiresWork)
+
 		if phase == string(cdiv1.Succeeded) && requiresWork {
+			log.V(1).Info("*** pvc phase Succeed and require work")
 			if err := dvc.updateStatusPhase(pvc, dataVolumeCopy, &event); err != nil {
 				return reconcile.Result{}, err
 			}
 		} else {
+			log.V(1).Info("*** going through pvc phase", "phase", pvc.Status.Phase)
 			switch pvc.Status.Phase {
 			case corev1.ClaimPending:
+				log.V(1).Info("*** pvc phase is pending")
 				if requiresWork {
+					log.V(1).Info("*** and require work")
 					if err := r.updateStatusPVCPending(pvc, dvc, dataVolumeCopy, &event); err != nil {
 						return reconcile.Result{}, err
 					}
 				} else {
+					log.V(1).Info("*** set dv's phase to succeeded")
 					dataVolumeCopy.Status.Phase = cdiv1.Succeeded
 				}
 			case corev1.ClaimBound:
+				log.V(1).Info("*** pvc phase is bound", "dv's phase", dataVolumeCopy.Status.Phase)
 				switch dataVolumeCopy.Status.Phase {
 				case cdiv1.Pending:
+					log.V(1).Info("*** dv's phase is pending, change it to PVCBound")
 					dataVolumeCopy.Status.Phase = cdiv1.PVCBound
 				case cdiv1.WaitForFirstConsumer:
+					log.V(1).Info("*** dv's phase is WaitForFirstConsumer, change it to PVCBound")
 					dataVolumeCopy.Status.Phase = cdiv1.PVCBound
 				case cdiv1.Unknown:
+					log.V(1).Info("*** dv's phase is Unknown, change it to PVCBound")
 					dataVolumeCopy.Status.Phase = cdiv1.PVCBound
 				}
 
 				if requiresWork {
+					log.V(1).Info("*** pvc requires work, updateStatusPhase on dvc")
 					if err := dvc.updateStatusPhase(pvc, dataVolumeCopy, &event); err != nil {
+						log.Error(err, "*** failed to update status phase on dvc")
 						return reconcile.Result{}, err
 					}
 				} else {
+					log.V(1).Info("*** set dv's phase to succeeded when not require work")
 					dataVolumeCopy.Status.Phase = cdiv1.Succeeded
 				}
 
 			case corev1.ClaimLost:
+				log.V(1).Info("*** pvc phase is lost")
 				dataVolumeCopy.Status.Phase = cdiv1.Failed
 				event.eventType = corev1.EventTypeWarning
 				event.reason = ErrClaimLost
 				event.message = fmt.Sprintf(MessageErrClaimLost, pvc.Name)
 			default:
+				log.V(1).Info("*** fall to default")
 				if pvc.Status.Phase != "" {
+					log.V(1).Info("*** pvc phase is unknown", "real", pvc.Status.Phase)
 					dataVolumeCopy.Status.Phase = cdiv1.Unknown
 				}
 			}
 		}
 
 		if i, err := strconv.ParseInt(pvc.Annotations[cc.AnnPodRestarts], 10, 32); err == nil && i >= 0 {
+			log.V(1).Info("*** pvc restart count", "count", i)
 			dataVolumeCopy.Status.RestartCount = int32(i)
 		}
 		if err := r.reconcileProgressUpdate(dataVolumeCopy, pvc, &result); err != nil {
+			log.Error(err, "*** failed to reconcile progress update")
 			return result, err
 		}
 	}
@@ -979,6 +1034,7 @@ func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPh
 	currentCond := make([]cdiv1.DataVolumeCondition, len(dataVolumeCopy.Status.Conditions))
 	copy(currentCond, dataVolumeCopy.Status.Conditions)
 	r.updateConditions(dataVolumeCopy, pvc, "", "")
+	log.V(1).Info("*** returning from base updateStatus", "dv conditions", dataVolumeCopy.Status.Conditions, "result", result)
 	return result, r.emitEvent(dv, dataVolumeCopy, curPhase, currentCond, &event)
 }
 
@@ -1050,6 +1106,7 @@ func (r *ReconcilerBase) emitConditionEvent(dataVolume *cdiv1.DataVolume, origin
 func (r *ReconcilerBase) emitBoundConditionEvent(dataVolume *cdiv1.DataVolume, current, original *cdiv1.DataVolumeCondition) {
 	// We know reason and message won't be empty for bound.
 	if current != nil && (original == nil || current.Status != original.Status || current.Reason != original.Reason || current.Message != original.Message) {
+		r.log.Info("Emitting bound event", "name", dataVolume.Name, "eventType", corev1.EventTypeNormal, "reason", current.Reason, "message", current.Message)
 		r.recorder.Event(dataVolume, corev1.EventTypeNormal, current.Reason, current.Message)
 	}
 }
@@ -1070,6 +1127,7 @@ func (r *ReconcilerBase) emitFailureConditionEvent(dataVolume *cdiv1.DataVolume,
 		// by CDI and sounds more drastic than it actually is.
 		if curRunning.Message != "" && curRunning.Message != common.ScratchSpaceRequired &&
 			(orgRunning == nil || orgRunning.Message != curRunning.Message) {
+			r.log.Info("*** emitting event for DataVolume", "name", dataVolume.Name, "eventType", corev1.EventTypeWarning, "reason", curRunning.Reason, "message", curRunning.Message)
 			r.recorder.Event(dataVolume, corev1.EventTypeWarning, curRunning.Reason, curRunning.Message)
 		}
 	}
@@ -1087,6 +1145,7 @@ func (r *ReconcilerBase) emitEvent(dataVolume *cdiv1.DataVolume, dataVolumeCopy 
 		}
 		// Emit the event only on status phase change
 		if event.eventType != "" && curPhase != dataVolumeCopy.Status.Phase {
+			r.log.Info("Emitting event for DataVolume status change", "name", dataVolumeCopy.Name, "eventType", event.eventType, "reason", event.reason, "message", event.message)
 			r.recorder.Event(dataVolumeCopy, event.eventType, event.reason, event.message)
 		}
 
