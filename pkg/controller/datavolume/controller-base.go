@@ -951,7 +951,7 @@ func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPh
 
 		phase := pvc.Annotations[cc.AnnPodPhase]
 
-		log.V(1).Info("*** pvc phase is", "phase", phase)
+		log.V(1).Info("*** pvc pod anno phase is", "phase", phase)
 
 		requiresWork, err := r.pvcRequiresWork(pvc, dataVolumeCopy)
 		if err != nil {

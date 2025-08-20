@@ -264,6 +264,8 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, nil
 	}
 
+	log.V(1).Info("=== updating pvc bound condition from events")
+
 	if err := cc.UpdatePVCBoundContionFromEvents(pvc, r.client, r.log); err != nil {
 		return reconcile.Result{}, err
 	}
@@ -283,6 +285,8 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 	if hasFinalizer {
 		return r.reconcileDone(ctx, log, pvc)
 	}
+
+	log.V(1).Info("Nothing to reconcile, the pvc is good", pvc, pvc)
 
 	return reconcile.Result{}, nil
 }
@@ -364,7 +368,7 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
-	log.V(3).Info("created phases", "num", len(phases))
+	log.V(3).Info("=== created phases", "num", len(phases), "phases", phases)
 
 	var statusResults []*clone.PhaseStatus
 	for _, p := range phases {
