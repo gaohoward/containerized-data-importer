@@ -152,6 +152,7 @@ func progressFromClaim(ctx context.Context, args *progressFromClaimArgs) (string
 
 // Reconcile creates the desired pvc and waits for the operation to complete
 func (p *HostClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, error) {
+	p.Log.Info("=== reconciling host clone phase", "namespace", p.Namespace, "claim", p.DesiredClaim.Name)
 	actualClaim := &corev1.PersistentVolumeClaim{}
 	exists, err := getResource(ctx, p.Client, p.Namespace, p.DesiredClaim.Name, actualClaim)
 	if err != nil {
@@ -159,16 +160,22 @@ func (p *HostClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, erro
 	}
 
 	if !exists {
+		p.Log.Info("=== creating host clone PVC as not exist")
 		actualClaim, err = p.createClaim(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	p.Log.Info("checking if clone complete")
+
 	if !p.hostCloneComplete(actualClaim) {
 		// requeue to update status
+		p.Log.Info("=== host clone not complete, requeuing", "namespace", p.Namespace, "claim", p.DesiredClaim.Name)
 		return &reconcile.Result{RequeueAfter: 3 * time.Second}, nil
 	}
+
+	p.Log.Info("=== host clone complete", "namespace", p.Namespace, "claim", p.DesiredClaim.Name)
 
 	return nil, nil
 }

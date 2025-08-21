@@ -390,7 +390,10 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
-	log.V(3).Info("=== created phases", "num", len(phases), "phases", phases)
+	log.V(3).Info("=== created phases", "num", len(phases))
+	for i, p := range phases {
+		log.V(1).Info("=== phase", "index", i, "name", p.Name())
+	}
 
 	var statusResults []*clone.PhaseStatus
 	for _, p := range phases {
@@ -415,6 +418,7 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 
 		if result != nil {
 			log.V(1).Info("currently in phase, returning", "name", p.Name(), "progress", progress)
+			log.V(1).Info("=== phase result", "result", result)
 			return *result, r.updateClonePhase(ctx, log, pvc, p.Name(), statusResults)
 		}
 	}
