@@ -249,13 +249,15 @@ func NewClonePopulator(
 // Reconcile the reconcile loop for the PVC with DataSourceRef of VolumeCloneSource kind
 func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	log := r.log.WithValues("PVC", req.NamespacedName)
-	log.V(1).Info("reconciling Clone Source PVC")
+	log.V(1).Info("=== reconciling Clone Source PVC")
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.client.Get(ctx, req.NamespacedName, pvc); err != nil {
 		if k8serrors.IsNotFound(err) {
+			log.V(1).Info("=== pvc not found")
 			return reconcile.Result{}, nil
 		}
+		log.Error(err, "=== failed to get pvc")
 		return reconcile.Result{}, err
 	}
 
@@ -270,6 +272,8 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, err
 	}
 
+	log.V(1).Info("=== after updating pvc bound condition from events", "anno", pvc.GetAnnotations())
+
 	hasFinalizer := cc.HasFinalizer(pvc, cloneFinalizer)
 	isBound := cc.IsBound(pvc)
 	isDeleted := !pvc.DeletionTimestamp.IsZero()
@@ -283,6 +287,7 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	if hasFinalizer {
+		log.V(1).Info("=== reconcile done, pvc has finalizer")
 		return r.reconcileDone(ctx, log, pvc)
 	}
 
@@ -292,8 +297,13 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 }
 
 func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, statusOnly bool) (reconcile.Result, error) {
+
+	log.V(1).Info("=== reconciling pending PVC", "status only?", statusOnly)
+
 	ready, _, err := claimReadyForPopulation(ctx, r.client, pvc)
+
 	if err != nil {
+		log.V(1).Info("=== failed to check claim readiness", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -302,8 +312,11 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
+	log.V(1).Info("=== getting volumeclonesource")
+
 	vcs, err := r.getVolumeCloneSource(ctx, log, pvc)
 	if err != nil {
+		log.V(1).Info("=== failed to get volumeCloneSource", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -312,12 +325,17 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
-	if err = r.validateCrossNamespace(pvc, vcs); err != nil {
+	log.V(1).Info("=== vcs got, check cross namespace")
+
+	if err = r.validateCrossNamespace(pvc, vcs, log); err != nil {
+		log.V(1).Info("=== failed to validate cross-namespace", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
+	log.V(1).Info("=== vcs validated, getting clone strategy")
 	csr, err := r.getCloneStrategy(ctx, log, pvc, vcs)
 	if err != nil {
+		log.V(1).Info("=== failed to get clone strategy", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -327,8 +345,10 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{RequeueAfter: 5 * time.Second}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
+	log.V(1).Info("=== init target claim (adding annotations)", "csr name", csr.Strategy)
 	updated, err := r.initTargetClaim(ctx, log, pvc, vcs, csr)
 	if err != nil {
+		log.V(1).Info("=== failed to init target claim", "error", err)
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 	}
 
@@ -337,6 +357,8 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		// phase will be set to pending by initTargetClaim if unset
 		return reconcile.Result{}, nil
 	}
+
+	log.V(1).Info("=== time to plan and execute", "target pvc", pvc, "source", vcs)
 
 	args := &clone.PlanArgs{
 		Log:         log,
@@ -402,17 +424,21 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 	return reconcile.Result{}, r.updateClonePhaseSucceeded(ctx, log, pvc, statusResults)
 }
 
-func (r *ClonePopulatorReconciler) validateCrossNamespace(pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource) error {
+func (r *ClonePopulatorReconciler) validateCrossNamespace(pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource, log logr.Logger) error {
+	log.V(1).Info("=== validating cross-namespace", "pvcNamespace", pvc.Namespace, "vcsNamespace", vcs.Namespace)
 	if pvc.Namespace == vcs.Namespace {
 		return nil
 	}
 
+	log.V(1).Info("=== not in same ns, checking annotations", "annokey", AnnDataSourceNamespace)
+
 	anno, ok := pvc.Annotations[AnnDataSourceNamespace]
+
 	if ok && anno == vcs.Namespace {
+		log.V(1).Info("=== found matching annotation, same as vcs ns, validating tokens")
 		if err := r.multiTokenValidator.ValidatePopulator(vcs, pvc); err != nil {
 			return err
 		}
-
 		return nil
 	}
 
@@ -571,14 +597,19 @@ func (r *ClonePopulatorReconciler) getVolumeCloneSource(ctx context.Context, log
 		},
 	}
 
+	log.V(1).Info("=== retrieving volumeCloneSource", "name", obj.Name, "namespace", obj.Namespace)
+
 	if err := r.client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 		if k8serrors.IsNotFound(err) {
+			log.V(1).Info("=== volumeCloneSource not found")
 			return nil, nil
 		}
 
+		log.V(1).Info("=== failed to get volumeCloneSource", "error", err)
 		return nil, err
 	}
 
+	log.V(1).Info("=== successfully retrieved volumeCloneSource", "objspec", obj.Spec)
 	return obj, nil
 }
 
