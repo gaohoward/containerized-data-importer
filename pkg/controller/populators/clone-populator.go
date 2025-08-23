@@ -396,23 +396,31 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 	}
 
 	var statusResults []*clone.PhaseStatus
+
+	log.V(1).Info("=== now going through each phase", "statusOnly", statusOnly)
 	for _, p := range phases {
+		log.V(1).Info("=== begin phase", "name", p.Name())
 		var result *reconcile.Result
 		var err error
 		var progress string
 		if !statusOnly {
+			log.V(1).Info("=== reconciling phase because not statusonly", "name", p.Name())
 			result, err = p.Reconcile(ctx)
 			if err != nil {
+				log.V(1).Info("=== failed to reconcile phase", "name", p.Name(), "error", err)
 				return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 			}
 		}
 
 		if sr, ok := p.(clone.StatusReporter); ok {
+			log.V(1).Info("=== this phase is a statusReporter, get status", "name", p.Name())
 			ps, err := sr.Status(ctx)
 			if err != nil {
+				log.V(1).Info("=== failed to get phase status", "name", p.Name(), "error", err)
 				return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
 			}
 			progress = ps.Progress
+			log.V(1).Info("=== appending statusresults", "name", p.Name(), "progress", progress)
 			statusResults = append(statusResults, ps)
 		}
 

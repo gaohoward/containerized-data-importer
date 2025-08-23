@@ -181,31 +181,59 @@ func (p *HostClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, erro
 }
 
 func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVolumeClaim, error) {
+
+	p.Log.Info("=== creating host clone PVC", "name", p.DesiredClaim.Name, "p:namespace", p.Namespace)
+
 	claim := p.DesiredClaim.DeepCopy()
 
 	claim.Namespace = p.Namespace
+
+	p.Log.Info("=== adding annotations to claim copy")
+
 	cc.AddAnnotation(claim, cc.AnnPreallocationRequested, fmt.Sprintf("%t", p.Preallocation))
+	p.Log.Info("adding", "ann key", cc.AnnPreallocationRequested, "value", fmt.Sprintf("%t", p.Preallocation))
+
 	cc.AddAnnotation(claim, cc.AnnOwnerUID, string(p.Owner.GetUID()))
+	p.Log.Info("adding", "ann key", cc.AnnOwnerUID, "value", string(p.Owner.GetUID()))
+
 	cc.AddAnnotation(claim, cc.AnnPodRestarts, "0")
+	p.Log.Info("adding", "ann key", cc.AnnPodRestarts, "value", "0")
+
 	cc.AddAnnotation(claim, cc.AnnCloneRequest, fmt.Sprintf("%s/%s", p.Namespace, p.SourceName))
+	p.Log.Info("adding", "ann key", cc.AnnCloneRequest, "value", fmt.Sprintf("%s/%s", p.Namespace, p.SourceName))
+
 	cc.AddAnnotation(claim, cc.AnnPopulatorKind, cdiv1.VolumeCloneSourceRef)
+	p.Log.Info("adding", "ann key", cc.AnnPopulatorKind, "value", cdiv1.VolumeCloneSourceRef)
+
 	cc.AddAnnotation(claim, cc.AnnEventSourceKind, p.Owner.GetObjectKind().GroupVersionKind().Kind)
+	p.Log.Info("adding", "ann key", cc.AnnEventSourceKind, "value", p.Owner.GetObjectKind().GroupVersionKind().Kind)
+
 	cc.AddAnnotation(claim, cc.AnnEventSource, fmt.Sprintf("%s/%s", p.Owner.GetNamespace(), p.Owner.GetName()))
+	p.Log.Info("adding", "ann key", cc.AnnEventSource, "value", fmt.Sprintf("%s/%s", p.Owner.GetNamespace(), p.Owner.GetName()))
+
 	if p.OwnershipLabel != "" {
+		p.Log.Info("adding ownership label", "label", p.OwnershipLabel)
 		AddOwnershipLabel(p.OwnershipLabel, claim, p.Owner)
 	}
 	if p.ImmediateBind {
+		p.Log.Info("p.ImmediateBind true, adding annotation", "ann key", cc.AnnImmediateBinding)
 		cc.AddAnnotation(claim, cc.AnnImmediateBinding, "")
 	}
 	if p.PriorityClassName != "" {
+		p.Log.Info("priority class name is set, adding annotation", "ann key", cc.AnnPriorityClassName, "value", p.PriorityClassName)
 		cc.AddAnnotation(claim, cc.AnnPriorityClassName, p.PriorityClassName)
 	}
+	p.Log.Info("adding label", "label", cc.LabelExcludeFromVeleroBackup)
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
+	p.Log.Info("=== go creating claim", "claim", claim)
 	if err := p.Client.Create(ctx, claim); err != nil {
+		p.Log.Info("=== failed to create claim, go check quota before return", "claim", claim, "error", err)
 		checkQuotaExceeded(p.Recorder, p.Owner, err)
 		return nil, err
 	}
+
+	p.Log.Info("=== successfully created claim", "claim", claim)
 
 	return claim, nil
 }
@@ -215,8 +243,11 @@ func (p *HostClonePhase) hostCloneComplete(pvc *corev1.PersistentVolumeClaim) bo
 	// both the upload controller and clone controller update the PVC status to succeeded
 	// but only the clone controller will set the preallocation annotation
 	// so we have to wait for that
+	p.Log.Info("=== Check host clone completeness", "preallocation", p.Preallocation, "preall applied", pvc.Annotations[cc.AnnPreallocationApplied])
 	if p.Preallocation && pvc.Annotations[cc.AnnPreallocationApplied] != "true" {
+		p.Log.Info("=== we are not complete yet, so will reconcile again")
 		return false
 	}
+	p.Log.Info("=== the preallocation is good, now checking pod phase annotation", "key", cc.AnnPodPhase, "pod phase", pvc.Annotations[cc.AnnPodPhase])
 	return pvc.Annotations[cc.AnnPodPhase] == string(cdiv1.Succeeded)
 }
