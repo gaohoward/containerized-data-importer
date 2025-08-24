@@ -195,6 +195,9 @@ func NewClonePopulator(
 	installerLabels map[string]string,
 	publicKey *rsa.PublicKey,
 ) (controller.Controller, error) {
+
+	log.V(1).Info("Creating-Clone-Populator", "clonerImage", clonerImage, "pullPolicy", pullPolicy)
+
 	client := mgr.GetClient()
 	reconciler := &ClonePopulatorReconciler{
 		ReconcilerBase: ReconcilerBase{
@@ -242,6 +245,8 @@ func NewClonePopulator(
 	if err := planner.AddCoreWatches(reconciler.log); err != nil {
 		return nil, err
 	}
+
+	log.Info("Clone Populator created successfully")
 
 	return clonePopulator, nil
 }
