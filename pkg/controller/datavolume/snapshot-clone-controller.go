@@ -151,7 +151,10 @@ func (r *SnapshotCloneReconciler) Reconcile(ctx context.Context, req reconcile.R
 	log := r.log.WithValues("request", req)
 	log.V(1).Info("*** starting snapshot clone reconciliation cycle ===")
 
-	return r.reconcile(ctx, req, r)
+	resp, err := r.reconcile(ctx, req, r)
+
+	log.V(1).Info("*** end of snapshot clone reconciliation cycle ===", "resp", resp, "err", err)
+	return resp, err
 }
 
 func (r *SnapshotCloneReconciler) prepare(syncState *dvSyncState) error {
@@ -222,15 +225,18 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 	log.V(1).Info("*** ensuring extended token for DataVolume", "namespace", datavolume.Namespace, "name", datavolume.Name)
 
 	if addedToken, err := r.ensureExtendedTokenDV(datavolume); err != nil {
+		log.Info("*** failed to ensure extended token for DataVolume", "err", err)
 		return syncRes, err
 	} else if addedToken {
+		log.Info("*** token already added, return for next reconcile")
 		// make sure token gets persisted before doing anything else
 		return syncRes, nil
 	}
 
-	log.V(1).Info("*** checking pvc ", "pvc", pvc)
+	log.V(1).Info("***no tokens yet, checking pvc ", "pvc", pvc)
 
 	if pvc == nil {
+		log.Info("*** pvc is nil, do something")
 		// Check if source snapshot exists and do proper validation before attempting to clone
 		if done, err := r.validateCloneAndSourceSnapshot(&syncRes); err != nil || !done {
 			log.V(1).Info("*** failed to validate clone and source snapshot", "err", err)
@@ -254,6 +260,7 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 				log.V(1).Info("*** checking cross namespace clone")
 				if !cc.HasFinalizer(datavolume, crossNamespaceFinalizer) {
 					cc.AddFinalizer(datavolume, crossNamespaceFinalizer)
+					log.V(1).Info("*** added cross namespace finalizer and return (event: CloneScheduled)", "finalizer", crossNamespaceFinalizer)
 					return syncRes, r.syncCloneStatusPhase(&syncRes, cdiv1.CloneScheduled, nil)
 				}
 			}
@@ -291,6 +298,7 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 	if syncRes.usePopulator {
 		log.V(1).Info("*** using populator so reconciling volume clone source CR", "syncRes", syncRes)
 		if err := r.reconcileVolumeCloneSourceCR(&syncRes); err != nil {
+			log.V(1).Info("*** failed to reconcile volume clone source CR, return", "err", err)
 			return syncRes, err
 		}
 
@@ -298,6 +306,7 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 
 		ct, ok := pvc.Annotations[cc.AnnCloneType]
 		if ok {
+			log.V(1).Info("*** updating clone type anno", "ct", ct)
 			cc.AddAnnotation(datavolume, cc.AnnCloneType, ct)
 		}
 	} else {

@@ -254,7 +254,7 @@ func NewClonePopulator(
 // Reconcile the reconcile loop for the PVC with DataSourceRef of VolumeCloneSource kind
 func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	log := r.log.WithValues("PVC", req.NamespacedName)
-	log.V(1).Info("=== reconciling Clone Source PVC")
+	log.V(1).Info("=== reconciling Clone Source PVC (someone (like snapshot-clone-controller) created it)")
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.client.Get(ctx, req.NamespacedName, pvc); err != nil {
@@ -288,6 +288,7 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 		"isBound", isBound, "isDeleted", isDeleted, "isSucceeded", isSucceeded)
 
 	if !isDeleted && !isSucceeded {
+		log.V(1).Info("*** go reconciling pending pvc...")
 		return r.reconcilePending(ctx, log, pvc, isBound)
 	}
 
@@ -326,7 +327,7 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 	}
 
 	if vcs == nil {
-		log.V(3).Info("dataSourceRef does not exist, exiting")
+		log.V(3).Info("volumeclonesource not found, exiting")
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
@@ -483,19 +484,25 @@ func (r *ClonePopulatorReconciler) reconcileDone(ctx context.Context, log logr.L
 func (r *ClonePopulatorReconciler) initTargetClaim(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, vcs *cdiv1.VolumeCloneSource, csr *clone.ChooseStrategyResult) (bool, error) {
 	claimCpy := pvc.DeepCopy()
 	clone.AddCommonClaimLabels(claimCpy)
+	log.Info("*** added common labels, set clone strategy", "strategy", csr.Strategy)
 	setSavedCloneStrategy(claimCpy, csr.Strategy)
 	if claimCpy.Annotations[AnnClonePhase] == "" {
+		log.Info("*** setting clone phase to pending as it's empty")
 		cc.AddAnnotation(claimCpy, AnnClonePhase, clone.PendingPhaseName)
 	}
 	if claimCpy.Annotations[AnnCloneFallbackReason] == "" && csr.FallbackReason != nil {
+		log.Info("*** setting clone fallback reason", "reason", *csr.FallbackReason)
 		cc.AddAnnotation(claimCpy, AnnCloneFallbackReason, *csr.FallbackReason)
 	}
+	log.Info("*** added finalizer", "finalizer", cloneFinalizer)
 	cc.AddFinalizer(claimCpy, cloneFinalizer)
 
 	if !apiequality.Semantic.DeepEqual(pvc, claimCpy) {
 		if err := r.client.Update(ctx, claimCpy); err != nil {
 			return false, err
 		}
+
+		log.Info("*** successfully updated pvc's annos and labels")
 
 		return true, nil
 	}
@@ -601,7 +608,7 @@ func (r *ClonePopulatorReconciler) getVolumeCloneSource(ctx context.Context, log
 	ns := pvc.Namespace
 	anno, ok := pvc.Annotations[AnnDataSourceNamespace]
 	if ok {
-		log.V(3).Info("found datasource namespace annotation", "namespace", ns)
+		log.V(3).Info("found datasource namespace annotation", "namespace", anno, "pvc ns", ns)
 		ns = anno
 	} else if pvc.Spec.DataSourceRef.Namespace != nil {
 		ns = *pvc.Spec.DataSourceRef.Namespace

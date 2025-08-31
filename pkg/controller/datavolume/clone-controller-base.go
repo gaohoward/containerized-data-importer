@@ -316,6 +316,7 @@ func (r *CloneReconcilerBase) reconcileVolumeCloneSourceCR(syncState *dvSyncStat
 	if err != nil {
 		return err
 	}
+	r.log.Info("*** looking up VolumeCloneSource", "name", volumeCloneSourceName, "namespace", sourceNamespace, "exist", exists)
 
 	if deletedOrSucceeded || exists {
 		if deletedOrSucceeded && exists {
@@ -367,6 +368,8 @@ func (r *CloneReconcilerBase) reconcileVolumeCloneSourceCR(syncState *dvSyncStat
 			return err
 		}
 	}
+
+	r.log.Info("Created volumeclonesource here", "VolumeCloneSource", volumeCloneSource)
 
 	return nil
 }

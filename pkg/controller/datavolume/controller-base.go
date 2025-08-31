@@ -473,6 +473,7 @@ func (r *ReconcilerBase) reconcile(ctx context.Context, req reconcile.Request, d
 	if syncRes.result != nil {
 		res = *syncRes.result
 	}
+	log.V(1).Info("***base, dvc reconcile done", "result", res, "err", err)
 	return res, err
 }
 
@@ -566,6 +567,7 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 	}
 
 	if syncState.pvc != nil {
+		log.V(1).Info("*** the pvc in syncState not nil", "namespace", syncState.pvc.Namespace, "name", syncState.pvc.Name)
 		if err := r.validatePVC(dv, syncState.pvc); err != nil {
 			return syncState, err
 		}
@@ -928,6 +930,7 @@ func (r *ReconcilerBase) updateStatus(req reconcile.Request, phaseSync *statusPh
 	log.V(1).Info("***base found pvc", "pvc", pvc, "err", err)
 
 	if err != nil {
+		log.V(1).Info("***base found pvc but error, return result", "pvc", pvc, "err", err)
 		return reconcile.Result{}, err
 	}
 
@@ -1103,6 +1106,7 @@ func (r *ReconcilerBase) emitConditionEvent(dataVolume *cdiv1.DataVolume, origin
 func (r *ReconcilerBase) emitBoundConditionEvent(dataVolume *cdiv1.DataVolume, current, original *cdiv1.DataVolumeCondition) {
 	// We know reason and message won't be empty for bound.
 	if current != nil && (original == nil || current.Status != original.Status || current.Reason != original.Reason || current.Message != original.Message) {
+		r.log.Info("Emitting bound event", "name", dataVolume.Name, "eventType", corev1.EventTypeNormal, "reason", current.Reason, "message", current.Message)
 		r.recorder.Event(dataVolume, corev1.EventTypeNormal, current.Reason, current.Message)
 	}
 }
@@ -1123,6 +1127,7 @@ func (r *ReconcilerBase) emitFailureConditionEvent(dataVolume *cdiv1.DataVolume,
 		// by CDI and sounds more drastic than it actually is.
 		if curRunning.Message != "" && curRunning.Message != common.ScratchSpaceRequired &&
 			(orgRunning == nil || orgRunning.Message != curRunning.Message) {
+			r.log.Info("*** emitting event for DataVolume", "name", dataVolume.Name, "eventType", corev1.EventTypeWarning, "reason", curRunning.Reason, "message", curRunning.Message)
 			r.recorder.Event(dataVolume, corev1.EventTypeWarning, curRunning.Reason, curRunning.Message)
 		}
 	}
@@ -1140,6 +1145,7 @@ func (r *ReconcilerBase) emitEvent(dataVolume *cdiv1.DataVolume, dataVolumeCopy 
 		}
 		// Emit the event only on status phase change
 		if event.eventType != "" && curPhase != dataVolumeCopy.Status.Phase {
+			r.log.Info("Emitting event for DataVolume status change", "name", dataVolumeCopy.Name, "eventType", event.eventType, "reason", event.reason, "message", event.message)
 			r.recorder.Event(dataVolumeCopy, event.eventType, event.reason, event.message)
 		}
 

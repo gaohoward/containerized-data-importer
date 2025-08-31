@@ -45,6 +45,7 @@ func (p *SnapshotClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, 
 	p.Log.Info("=== reconciling snapshot clone phase", "name", p.Name())
 
 	pvc := &corev1.PersistentVolumeClaim{}
+	p.Log.Info("=== finding desired PVC", "name", p.DesiredClaim.Name, "namespace", p.Namespace)
 	exists, err := getResource(ctx, p.Client, p.Namespace, p.DesiredClaim.Name, pvc)
 	if err != nil {
 		p.Log.Error(err, "=== failed to get PVC", "name", p.DesiredClaim.Name)
@@ -72,13 +73,13 @@ func (p *SnapshotClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, 
 			return &reconcile.Result{}, nil
 		}
 
-		p.Log.Info("=== creating PVC from snapshot", "name", p.SourceName, "namespace", p.Namespace)
+		p.Log.Info("=== creating PVC from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 		pvc, err = p.createClaim(ctx, snapshot)
 		if err != nil {
-			p.Log.Error(err, "=== failed to create PVC from snapshot", "name", p.SourceName, "namespace", p.Namespace)
+			p.Log.Error(err, "=== failed to create PVC from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 			return nil, err
 		}
-		p.Log.Info("=== created PVC from snapshot", "name", p.SourceName, "namespace", p.Namespace)
+		p.Log.Info("=== created PVC from snapshot", "pvc name", pvc.Name, "namespace", pvc.Namespace)
 	}
 
 	p.Log.Info("=== checking PVC bound or wffc", "pvc", pvc)
@@ -91,11 +92,11 @@ func (p *SnapshotClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, 
 	}
 
 	if !done {
-		p.Log.Info("=== pvc not bound or wffc", "pvc", pvc)
+		p.Log.Info("=== pvc not bound or its sc bind mode is not wffc", "pvc", pvc)
 		return &reconcile.Result{}, nil
 	}
 
-	p.Log.V(1).Info("=== returning all nils", "pvc", pvc)
+	p.Log.V(1).Info("=== returning all nils (bound)", "pvc", pvc)
 
 	return nil, nil
 }
@@ -130,6 +131,8 @@ func (p *SnapshotClonePhase) createClaim(ctx context.Context, snapshot *snapshot
 		checkQuotaExceeded(p.Recorder, p.Owner, err)
 		return nil, err
 	}
+
+	p.Log.Info("=== created PVC from snapshot", "name", claim.Name, "namespace", claim.Namespace)
 
 	return claim, nil
 }

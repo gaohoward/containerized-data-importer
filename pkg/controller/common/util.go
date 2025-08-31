@@ -2222,6 +2222,7 @@ func UpdatePVCBoundContionFromEvents(pvc *corev1.PersistentVolumeClaim, c client
 		// if not using populators just get the latest event
 		boundMessage = events.Items[0].Message
 		log.Info("=== not to use populators ===", "boundMessage", boundMessage, "pvc", pvc.Name, "ns", pvc.Namespace)
+		log.Info("=== hmm, of not to use populators, should we update anno cdi.kubevirt.io/storage.usePopulator to false?")
 	}
 
 	log.Info("=== go patching anno of pvc ===", "pvc", pvc.Name, "ns", pvc.Namespace)
