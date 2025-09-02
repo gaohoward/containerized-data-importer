@@ -882,7 +882,9 @@ func ValidateCanCloneSourceAndTargetSpec(ctx context.Context, c client.Client, s
 	}
 
 	if !permissive && sourceUsableSpace.Cmp(targetUsableSpace) > 0 {
-		return errors.New("target resources requests storage size is smaller than the source")
+		return fmt.Errorf("target resources requests storage size is smaller than the source: %s, target: %s, sourcePVC: %s, targetPVC: %s",
+			sourceUsableSpace.String(), targetUsableSpace.String(), sourcePvc.Name, targetPvc.Name)
+		// return errors.New("target resources requests storage size is smaller than the source")
 	}
 
 	// Can clone.
