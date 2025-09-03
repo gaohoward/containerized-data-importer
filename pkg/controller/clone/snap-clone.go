@@ -73,13 +73,13 @@ func (p *SnapshotClonePhase) Reconcile(ctx context.Context) (*reconcile.Result, 
 			return &reconcile.Result{}, nil
 		}
 
-		p.Log.Info("=== creating PVC from snapshot", "source", p.SourceName, "namespace", p.Namespace)
+		p.Log.Info("=== creating PVC(tmp-source) from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 		pvc, err = p.createClaim(ctx, snapshot)
 		if err != nil {
 			p.Log.Error(err, "=== failed to create PVC from snapshot", "source", p.SourceName, "namespace", p.Namespace)
 			return nil, err
 		}
-		p.Log.Info("=== created PVC from snapshot", "pvc name", pvc.Name, "namespace", pvc.Namespace)
+		p.Log.Info("=== created PVC(tmp-source) from snapshot", "pvc name", pvc.Name, "namespace", pvc.Namespace)
 	}
 
 	p.Log.Info("=== checking PVC bound or wffc", "pvc", pvc)
@@ -132,7 +132,7 @@ func (p *SnapshotClonePhase) createClaim(ctx context.Context, snapshot *snapshot
 		return nil, err
 	}
 
-	p.Log.Info("=== created PVC from snapshot", "name", claim.Name, "namespace", claim.Namespace)
+	p.Log.Info("=== created PVC tmp-source from snapshot", "name", claim.Name, "namespace", claim.Namespace)
 
 	return claim, nil
 }

@@ -304,7 +304,7 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 
 func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, statusOnly bool) (reconcile.Result, error) {
 
-	log.V(1).Info("=== reconciling pending PVC", "status only?", statusOnly)
+	log.V(1).Info("=== reconciling pending PVC", "status only?", statusOnly, "pvc", pvc)
 
 	ready, _, err := claimReadyForPopulation(ctx, r.client, pvc)
 
@@ -318,7 +318,7 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		return reconcile.Result{}, r.updateClonePhasePending(ctx, log, pvc)
 	}
 
-	log.V(1).Info("=== getting volumeclonesource")
+	log.V(1).Info("=== getting volumeclonesource", "pvc", pvc)
 
 	vcs, err := r.getVolumeCloneSource(ctx, log, pvc)
 	if err != nil {
@@ -435,6 +435,7 @@ func (r *ClonePopulatorReconciler) planAndExecute(ctx context.Context, log logr.
 			log.V(1).Info("=== phase result", "result", result)
 			return *result, r.updateClonePhase(ctx, log, pvc, p.Name(), statusResults)
 		}
+		log.V(1).Info("done this phase, next(if any)", "current name", p.Name(), "progress", progress)
 	}
 
 	log.V(3).Info("executed all phases, setting phase to Succeeded")

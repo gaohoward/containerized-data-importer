@@ -590,6 +590,8 @@ func (p *Planner) planHostAssistedFromSnapshot(ctx context.Context, args *PlanAr
 
 	desiredClaim := createDesiredClaim(args.DataSource.Namespace, args.TargetClaim)
 
+	args.Log.Info("constructed desired claim from target claim", "desiredClaim", *desiredClaim, "targetClaim", *args.TargetClaim)
+
 	hcp := &HostClonePhase{
 		Owner:          args.TargetClaim,
 		Namespace:      sourceClaimForDumbClone.Namespace,
@@ -787,10 +789,14 @@ func createDesiredClaim(namespace string, targetClaim *corev1.PersistentVolumeCl
 	desiredClaim.Spec.DataSource = nil
 	desiredClaim.Spec.DataSourceRef = nil
 
+	// make sure the pvc size is sufficient based on volume mode
+
 	return desiredClaim
 }
 
 func createTempSourceClaim(ctx context.Context, log logr.Logger, namespace string, targetClaim *corev1.PersistentVolumeClaim, snapshot *snapshotv1.VolumeSnapshot, client client.Client) (*corev1.PersistentVolumeClaim, error) {
+
+	log.Info("creating temp source pvc from snapshot", "snapshot", snapshot.Name, "targetClaim", targetClaim)
 	vsc, err := GetSnapshotContentFromSnapshot(ctx, client, snapshot)
 	if err != nil {
 		return nil, err
@@ -801,10 +807,15 @@ func createTempSourceClaim(ctx context.Context, log logr.Logger, namespace strin
 	}
 	targetCpy := targetClaim.DeepCopy()
 	fallbackVolumeMode := targetCpy.Spec.VolumeMode
+
+	log.Info("getting volume mode for temp source claim", "fallbackVolumeMode", fallbackVolumeMode)
 	volumeMode, err := getVolumeModeForTempSourceClaim(log, snapshot, vsc, fallbackVolumeMode)
 	if err != nil {
 		return nil, err
 	}
+
+	log.Info("got tmp-source volume mode", "volumeMode", volumeMode)
+
 	// Get the appropriate size from the snapshot
 	if snapshot.Status == nil || snapshot.Status.RestoreSize == nil || snapshot.Status.RestoreSize.Sign() == -1 {
 		return nil, fmt.Errorf("snapshot has no RestoreSize")
