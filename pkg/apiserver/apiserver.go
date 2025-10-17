@@ -223,7 +223,7 @@ func NewCdiAPIServer(bindAddress string,
 }
 
 func newUploadTokenGenerator(key *rsa.PrivateKey) token.Generator {
-	return token.NewGenerator(common.UploadTokenIssuer, key, 5*time.Minute)
+	return token.NewGenerator(common.UploadTokenIssuer, key, token.TokenExpiry)
 }
 
 func (app *cdiAPIApp) Start(ch <-chan struct{}) error {

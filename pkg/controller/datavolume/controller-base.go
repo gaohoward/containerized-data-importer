@@ -777,6 +777,7 @@ func (r *ReconcilerBase) createPvcForDatavolume(datavolume *cdiv1.DataVolume, pv
 	if err := r.client.Create(context.TODO(), newPvc); err != nil {
 		return nil, err
 	}
+	r.log.Info("--- Created PVC for DataVolume", "pvc", newPvc.Name, "namespace", newPvc.Namespace)
 	return newPvc, nil
 }
 

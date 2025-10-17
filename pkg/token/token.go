@@ -36,6 +36,9 @@ const (
 
 	// OperationUpload is the type of token for uploading to a PVC
 	OperationUpload Operation = "Upload"
+
+	// TokenExpiry time.Duration = 5 * time.Minute
+	TokenExpiry time.Duration = 3 * time.Second
 )
 
 // Operation is the type of the token

@@ -400,6 +400,7 @@ func (r *ImportReconciler) reconcileVolumeImportSourceCR(syncState *dvSyncState)
 			return err
 		}
 	}
+	r.log.Info("---Created ImportSource", "source", importSource)
 	return nil
 }
 

@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"reflect"
-	"time"
 
 	"github.com/appscode/jsonpatch"
 	snapclient "github.com/kubernetes-csi/external-snapshotter/client/v6/clientset/versioned"
@@ -97,7 +96,7 @@ func NewPopulatorValidatingWebhook(k8sClient kubernetes.Interface, cdiClient cdi
 }
 
 func newCloneTokenGenerator(key *rsa.PrivateKey) token.Generator {
-	return token.NewGenerator(common.CloneTokenIssuer, key, 5*time.Minute)
+	return token.NewGenerator(common.CloneTokenIssuer, key, token.TokenExpiry)
 }
 
 func newAdmissionHandler(a Admitter) http.Handler {
