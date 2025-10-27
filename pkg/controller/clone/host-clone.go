@@ -213,8 +213,8 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
 				// If the source PVC is fs, just copy the size request
-				p.Log.Info("to copy,", "real", realSourcePvcSizeRequest, "original", claim.Spec.Resources.Requests[corev1.ResourceStorage])
-				claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
+				p.Log.Info("not to copy,", "real", realSourcePvcSizeRequest, "original", claim.Spec.Resources.Requests[corev1.ResourceStorage])
+				// claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
 			} else {
 				// If the source PVC is block, we need to account for the overhead
 				usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim)
