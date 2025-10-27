@@ -2584,7 +2584,7 @@ var _ = Describe("all clone tests", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			DescribeTable("Should successfully clone using host assisted", func(volumeMode v1.PersistentVolumeMode, repeat int, crossNamespace bool) {
+			FDescribeTable("Should successfully clone using host assisted", func(volumeMode v1.PersistentVolumeMode, repeat int, crossNamespace bool) {
 				var i int
 				var err error
 

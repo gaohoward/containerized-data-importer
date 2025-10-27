@@ -205,28 +205,29 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			return nil, err
 		}
 
-		realSourcePvcSizeRequest := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		if claim.Spec.Resources.Requests != nil {
 
-		if claim.Spec.Resources.Requests == nil {
-			claim.Spec.Resources.Requests = make(corev1.ResourceList)
-		}
+			p.Log.Info("===================hit this!")
 
-		if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
-			// If the source PVC is fs, just copy the size request
-			claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
-		} else {
-			// If the source PVC is block, we need to account for the overhead
-			usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim)
+			realSourcePvcSizeRequest := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
 
-			if err != nil {
-				return nil, err
-			}
-			if usableSpace.Cmp(realSourcePvcSizeRequest) < 0 {
-				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, realSourcePvcSizeRequest.Value(), &claim.Spec)
+			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+				// If the source PVC is fs, just copy the size request
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
+			} else {
+				// If the source PVC is block, we need to account for the overhead
+				usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim)
+
 				if err != nil {
 					return nil, err
 				}
-				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+				if usableSpace.Cmp(realSourcePvcSizeRequest) < 0 {
+					newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, realSourcePvcSizeRequest.Value(), &claim.Spec)
+					if err != nil {
+						return nil, err
+					}
+					claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+				}
 			}
 		}
 	}
