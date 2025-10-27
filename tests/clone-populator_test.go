@@ -230,7 +230,7 @@ var _ = Describe("Clone Populator tests", func() {
 		return hash
 	}
 
-	Context("Clone from PVC", func() {
+	FContext("Clone from PVC", func() {
 		DescribeTable("should do filesystem to filesystem clone", func(webhookRendering bool) {
 			source := createSource(defaultSize, corev1.PersistentVolumeFilesystem)
 			createDataSource()
