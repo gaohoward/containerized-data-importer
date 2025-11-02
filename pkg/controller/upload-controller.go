@@ -181,6 +181,9 @@ func (r *UploadReconciler) shouldReconcile(isUpload bool, isCloneTarget bool, pv
 }
 
 func (r *UploadReconciler) reconcilePVC(log logr.Logger, pvc *corev1.PersistentVolumeClaim, isCloneTarget bool) (reconcile.Result, error) {
+
+	log.Info("===upload-controller Starting PVC reconciliation ===")
+
 	var uploadClientName string
 	pvcCopy := pvc.DeepCopy()
 	anno := pvcCopy.Annotations
@@ -204,6 +207,7 @@ func (r *UploadReconciler) reconcilePVC(log logr.Logger, pvc *corev1.PersistentV
 		anno[AnnUploadClientName] = uploadClientName
 	} else {
 		uploadClientName = uploadServerClientName
+		log.Info("is upload", "client-name", uploadClientName)
 	}
 
 	pod, err := r.findUploadPodForPvc(pvc)
@@ -212,6 +216,8 @@ func (r *UploadReconciler) reconcilePVC(log logr.Logger, pvc *corev1.PersistentV
 	}
 
 	if pod == nil {
+		log.Info("the upload pod not found")
+
 		podsUsingPVC, err := cc.GetPodsUsingPVCs(context.TODO(), r.client, pvc.Namespace, sets.New(pvc.Name), false)
 		if err != nil {
 			return reconcile.Result{}, err
@@ -233,23 +239,36 @@ func (r *UploadReconciler) reconcilePVC(log logr.Logger, pvc *corev1.PersistentV
 		}
 
 		podName, ok := pvc.Annotations[AnnUploadPod]
+		log.Info("get pod name", "name", podName, "from", AnnUploadPod)
 
 		if !ok {
+			log.Info("podName is not in annotation, generate")
 			podName = createUploadResourceName(pvc.Name)
+			log.Info("created the pod name for this reconcile", "name", podName)
+
 			if err := r.updatePvcPodName(pvc, podName, log); err != nil {
 				return reconcile.Result{}, err
 			}
 			return reconcile.Result{Requeue: true}, nil
 		}
+
+		log.Info("now we have the pod name go creating it", "name", podName)
+
 		pod, err = r.createUploadPodForPvc(pvc, podName, uploadClientName, isCloneTarget)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
+		log.Info("pod created successfully")
 	}
+
+	log.Info("now get Scratch name for pod")
 
 	// Always try to get or create the scratch PVC for a pod that is not successful yet, if it exists nothing happens otherwise attempt to create.
 	scratchPVCName, exists := getScratchNameFromPod(pod)
+
+	log.Info("got scratch name from pod", "name", scratchPVCName)
 	if exists {
+		log.Info("scratch already there")
 		_, err := r.getOrCreateScratchPvc(pvcCopy, pod, scratchPVCName)
 		if err != nil {
 			return reconcile.Result{}, err
@@ -257,6 +276,8 @@ func (r *UploadReconciler) reconcilePVC(log logr.Logger, pvc *corev1.PersistentV
 	}
 
 	svcName := naming.GetServiceNameFromResourceName(pod.Name)
+	log.Info("get upoad service name, get or create", "name", svcName)
+
 	if _, err = r.getOrCreateUploadService(pvc, svcName); err != nil {
 		return reconcile.Result{}, err
 	}
@@ -558,6 +579,7 @@ func (r *UploadReconciler) createUploadService(name string, pvc *corev1.Persiste
 		}
 	}
 	r.log.V(1).Info("upload service created\n", "Namespace", service.Namespace, "Name", service.Name)
+	r.log.Info("created upload service", "service", service)
 	return service, nil
 }
 
