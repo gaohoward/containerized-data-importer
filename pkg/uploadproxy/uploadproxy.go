@@ -265,7 +265,7 @@ func (app *uploadProxyApp) uploadReady(pvcName, pvcNamespace string) (*v1.Persis
 		pvc, err = app.client.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				return false, fmt.Errorf("rejecting Upload Request for PVC %s that doesn't exist", pvcName)
+				return false, fmt.Errorf("rejecting Upload Request for PVC %s that doesn't exist in ns %s", pvcName, pvcNamespace)
 			}
 
 			return false, err
