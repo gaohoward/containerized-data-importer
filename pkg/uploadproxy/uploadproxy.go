@@ -235,6 +235,8 @@ func (app *uploadProxyApp) handleUploadRequest(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	klog.Infof("calling proxy upload request with upload path: %s", uploadPath)
+
 	app.proxyUploadRequest(uploadPath, w, r)
 }
 
@@ -315,13 +317,19 @@ func (app *uploadProxyApp) proxyUploadRequest(uploadPath string, w http.Response
 		ErrorLog:  log.New(&buff, "", 0),
 	}
 
+	klog.Infof("Now proxying request to %s", uploadPath)
+
 	p.ServeHTTP(w, r)
+
+	klog.Info("request back, checking error buf")
 
 	if buff.Len() > 0 {
 		msg := buff.String()
 		klog.Errorf("Error in reverse proxy: %s", msg)
 		fmt.Fprintf(w, "error in upload-proxy: %s", msg)
 	}
+
+	klog.Info("done")
 }
 
 func (app *uploadProxyApp) getSigningKey(publicKeyPEM string) error {
