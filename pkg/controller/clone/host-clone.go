@@ -206,12 +206,28 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 		}
 
 		if claim.Spec.Resources.Requests != nil {
-			realSourcePvcSizeRequest := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
-
+			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
-				// If the source PVC is filesystem, just directly compare
-				if realSourcePvcSizeRequest.Cmp(claim.Spec.Resources.Requests[corev1.ResourceStorage]) > 0 {
-					claim.Spec.Resources.Requests[corev1.ResourceStorage] = realSourcePvcSizeRequest
+				// Get the datavolume associate with the source
+				dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc)
+				if err != nil {
+					return nil, err
+				}
+				if dv != nil {
+					sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv)
+					if err != nil {
+						return nil, err
+					}
+					// If the source PVC is filesystem, just directly compare
+					targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+					if targetSize.Cmp(*sourceSize) >= 0 {
+						// the target size has enough space, not to inflate
+						inflate = false
+					}
+				} else {
+					// can't determine the overhead, assuming size is correct
+					inflate = false
 				}
 			} else {
 				// If the source PVC is block, we need to account for the overhead
@@ -219,13 +235,16 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 				if err != nil {
 					return nil, err
 				}
-				if usableSpace.Cmp(realSourcePvcSizeRequest) < 0 {
-					newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, realSourcePvcSizeRequest.Value(), &claim.Spec)
-					if err != nil {
-						return nil, err
-					}
-					claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+				if usableSpace.Cmp(size) >= 0 {
+					inflate = false
 				}
+			}
+			if inflate {
+				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, size.Value(), &claim.Spec)
+				if err != nil {
+					return nil, err
+				}
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
 			}
 		}
 	}
