@@ -209,14 +209,19 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
 			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
-				fmt.Printf("============ok source volume is filesystem")
+				fmt.Printf("============ok source volume is filesystem\n")
 				// Get the datavolume associate with the source
 				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
+					fmt.Printf("====== got dv no error\n")
 					if dv != nil {
+						fmt.Printf("====dv is not null, get cloone size from source dv: %s\n", dv.Name)
 						if sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv); err == nil {
+							fmt.Printf("==== sourceSize : %v\n", *sourceSize)
 							// If the source PVC is filesystem, just directly compare
 							targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+							fmt.Printf("===== compaire target %v\n", targetSize)
 							if targetSize.Cmp(*sourceSize) >= 0 {
+								fmt.Printf("===== no need to inflate\n")
 								// the target size has enough space, not to inflate
 								inflate = false
 							}
