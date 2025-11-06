@@ -225,6 +225,8 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 								// the target size has enough space, not to inflate
 								inflate = false
 							}
+						} else {
+							inflate = false
 						}
 					} else {
 						// can't determine the overhead, assuming size is correct
