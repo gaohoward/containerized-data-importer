@@ -195,7 +195,7 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
-	if myVolumeMode := cc.GetVolumeMode(claim); myVolumeMode == corev1.PersistentVolumeFilesystem {
+	if targetVolumeMode := cc.GetVolumeMode(claim); targetVolumeMode == corev1.PersistentVolumeFilesystem {
 		// It is possible when the source pvc has VolumMode 'block'
 		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
 		sourcePvc := &corev1.PersistentVolumeClaim{}
@@ -209,6 +209,7 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
 			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+				fmt.Printf("============ok source volume is filesystem")
 				// Get the datavolume associate with the source
 				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
 					if dv != nil {
@@ -242,8 +243,10 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 				if err != nil {
 					return nil, err
 				}
+				fmt.Printf("====== infalted the size to %v\n", newUsableSpace)
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
 			} else {
+				fmt.Printf("========not inflate keep the size %v\n", size)
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = size
 			}
 		}
