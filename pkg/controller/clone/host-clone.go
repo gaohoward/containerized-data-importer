@@ -210,32 +210,30 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
 				// Get the datavolume associate with the source
-				dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc)
-				if err != nil {
-					return nil, err
-				}
-				if dv != nil {
-					sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv)
-					if err != nil {
-						return nil, err
-					}
-					// If the source PVC is filesystem, just directly compare
-					targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
-					if targetSize.Cmp(*sourceSize) >= 0 {
-						// the target size has enough space, not to inflate
+				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
+					if dv != nil {
+						if sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv); err == nil {
+							// If the source PVC is filesystem, just directly compare
+							targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+							if targetSize.Cmp(*sourceSize) >= 0 {
+								// the target size has enough space, not to inflate
+								inflate = false
+							}
+						}
+					} else {
+						// can't determine the overhead, assuming size is correct
 						inflate = false
 					}
 				} else {
-					// can't determine the overhead, assuming size is correct
 					inflate = false
 				}
 			} else {
 				// If the source PVC is block, we need to account for the overhead
-				usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim)
-				if err != nil {
-					return nil, err
-				}
-				if usableSpace.Cmp(size) >= 0 {
+				if usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim); err == nil {
+					if usableSpace.Cmp(size) >= 0 {
+						inflate = false
+					}
+				} else {
 					inflate = false
 				}
 			}
