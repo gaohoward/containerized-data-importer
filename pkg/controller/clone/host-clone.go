@@ -243,6 +243,8 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 					return nil, err
 				}
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
+			} else {
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = size
 			}
 		}
 	}
