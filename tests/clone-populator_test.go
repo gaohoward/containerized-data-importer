@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"kubevirt.io/containerized-data-importer/pkg/common"
@@ -316,6 +317,8 @@ var _ = Describe("Clone Populator tests", func() {
 			} else {
 				log("creating target")
 				target = createTarget(biggerSize, corev1.PersistentVolumeFilesystem)
+				bytes, _ := yaml.Marshal(*target)
+				log("target pvc: \n%s", string(bytes))
 			}
 
 			log("waiting for the target to be populated")
