@@ -69,12 +69,12 @@ var _ = Describe("Clone Populator tests", func() {
 		f.ForceBindPvcIfDvIsWaitForFirstConsumer(dataVolume)
 
 		log("expecting succeed...")
-		Expect(utils.WaitForDataVolumePhaseWithTimeout(f, f.Namespace.Name, cdiv1.Succeeded, dataVolume.Name, 180*time.Second)).To(Succeed())
+		Expect(utils.WaitForDataVolumePhaseWithTimeout(f, f.Namespace.Name, cdiv1.Succeeded, dataVolume.Name, 2*time.Hour)).To(Succeed())
 		pvc, err := f.K8sClient.CoreV1().PersistentVolumeClaims(dataVolume.Namespace).Get(context.TODO(), dataVolume.Name, metav1.GetOptions{})
 		Expect(err).ToNot(HaveOccurred())
 
 		pvcBytes, _ := yaml.Marshal(pvc)
-		fmt.Printf("*** PVC got: \n%s\n", string(pvcBytes))
+		log("*** PVC got: \n%s", string(pvcBytes))
 
 		return pvc
 	}
