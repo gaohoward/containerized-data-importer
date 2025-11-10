@@ -8,7 +8,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gopkg.in/yaml.v3"
 
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 
@@ -61,20 +60,20 @@ var _ = Describe("Clone Populator tests", func() {
 		dataVolume.Spec.PVC.VolumeMode = &vm
 		dataVolume, err := utils.CreateDataVolumeFromDefinition(f.CdiClient, f.Namespace.Name, dataVolume)
 		Expect(err).ToNot(HaveOccurred())
-		dvBytes, _ := yaml.Marshal(dataVolume)
 
-		log("*** DV deployed: \n%s", string(dvBytes))
+		log("*** DV deployed: %s", dataVolume.Name)
 
 		log("forcing pvc if wffc...")
 		f.ForceBindPvcIfDvIsWaitForFirstConsumer(dataVolume)
 
 		log("expecting succeed...")
 		Expect(utils.WaitForDataVolumePhaseWithTimeout(f, f.Namespace.Name, cdiv1.Succeeded, dataVolume.Name, 2*time.Hour)).To(Succeed())
+
+		log("fetching pvc %s", dataVolume.Name)
 		pvc, err := f.K8sClient.CoreV1().PersistentVolumeClaims(dataVolume.Namespace).Get(context.TODO(), dataVolume.Name, metav1.GetOptions{})
 		Expect(err).ToNot(HaveOccurred())
 
-		pvcBytes, _ := yaml.Marshal(pvc)
-		log("*** PVC got: \n%s", string(pvcBytes))
+		log("*** PVC got: %s", pvc.Name)
 
 		return pvc
 	}
