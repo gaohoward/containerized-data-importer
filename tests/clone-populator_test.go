@@ -178,6 +178,8 @@ var _ = Describe("Clone Populator tests", func() {
 
 	createTargetWithStrategy := func(sz resource.Quantity, vm corev1.PersistentVolumeMode, strategy, scName string) *corev1.PersistentVolumeClaim {
 		pvc := generateTargetPVCWithStrategy(sz, vm, strategy, scName)
+		targetBits, _ := yaml.Marshal(pvc)
+		log("target pvc before deploying: \n%s\n", string(targetBits))
 		err := f.CrClient.Create(context.Background(), pvc)
 		Expect(err).ToNot(HaveOccurred())
 		f.ForceSchedulingIfWaitForFirstConsumerPopulationPVC(pvc)
