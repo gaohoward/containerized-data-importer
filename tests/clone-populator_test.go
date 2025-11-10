@@ -28,7 +28,8 @@ import (
 )
 
 func log(format string, a ...any) {
-	fmt.Fprintf(GinkgoWriter, "=== "+format+"\n", a)
+	tm := time.Now().Format("20060102150405")
+	fmt.Fprintf(GinkgoWriter, "=== "+tm+" "+format+"\n", a)
 }
 
 var _ = Describe("Clone Populator tests", func() {
@@ -310,14 +311,22 @@ var _ = Describe("Clone Populator tests", func() {
 			createDataSource()
 
 			if webhookRendering {
+				log("creating imcomplete pvc..")
 				target = createIncompleteTarget(nil, corev1.PersistentVolumeFilesystem, "", utils.DefaultStorageClass.GetName())
 			} else {
+				log("creating target")
 				target = createTarget(biggerSize, corev1.PersistentVolumeFilesystem)
 			}
+
+			log("waiting for the target to be populated")
 			target = waitSucceeded(target)
+
+			log("compare hash...")
 			sourceHash := getHash(source, 100000)
 			targetHash := getHash(target, 100000)
 			Expect(targetHash).To(Equal(sourceHash))
+
+			log("check the clone is copy(host-clone fallback)")
 			f.ExpectCloneFallback(target, clone.IncompatibleVolumeModes, clone.MessageIncompatibleVolumeModes)
 		},
 			Entry("[test_id:10975]with valid target PVC", false),
