@@ -280,7 +280,7 @@ var _ = Describe("Clone Populator tests", func() {
 			Expect(targetHash).To(Equal(sourceHash))
 		})
 
-		DescribeTable("should do block to filesystem clone", func(webhookRendering bool) {
+		FDescribeTable("should do block to filesystem clone", func(webhookRendering bool) {
 			if !f.IsBlockVolumeStorageClassAvailable() {
 				Skip("Storage Class for block volume is not available")
 			}
