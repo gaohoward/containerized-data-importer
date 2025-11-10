@@ -8,6 +8,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"gopkg.in/yaml.v3"
 
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 
@@ -26,6 +27,10 @@ import (
 	"kubevirt.io/containerized-data-importer/tests/framework"
 	"kubevirt.io/containerized-data-importer/tests/utils"
 )
+
+func log(format string, a ...any) {
+	fmt.Fprintf(GinkgoWriter, "=== "+format+"\n", a)
+}
 
 var _ = Describe("Clone Populator tests", func() {
 	const (
@@ -56,10 +61,21 @@ var _ = Describe("Clone Populator tests", func() {
 		dataVolume.Spec.PVC.VolumeMode = &vm
 		dataVolume, err := utils.CreateDataVolumeFromDefinition(f.CdiClient, f.Namespace.Name, dataVolume)
 		Expect(err).ToNot(HaveOccurred())
+		dvBytes, _ := yaml.Marshal(dataVolume)
+
+		log("*** DV deployed: \n%s", string(dvBytes))
+
+		log("forcing pvc if wffc...")
 		f.ForceBindPvcIfDvIsWaitForFirstConsumer(dataVolume)
+
+		log("expecting succeed...")
 		Expect(utils.WaitForDataVolumePhaseWithTimeout(f, f.Namespace.Name, cdiv1.Succeeded, dataVolume.Name, 180*time.Second)).To(Succeed())
 		pvc, err := f.K8sClient.CoreV1().PersistentVolumeClaims(dataVolume.Namespace).Get(context.TODO(), dataVolume.Name, metav1.GetOptions{})
 		Expect(err).ToNot(HaveOccurred())
+
+		pvcBytes, _ := yaml.Marshal(pvc)
+		fmt.Printf("*** PVC got: \n%s\n", string(pvcBytes))
+
 		return pvc
 	}
 
@@ -281,11 +297,19 @@ var _ = Describe("Clone Populator tests", func() {
 		})
 
 		FDescribeTable("should do block to filesystem clone", func(webhookRendering bool) {
+
+			log("in testing with webhookRendering %v", webhookRendering)
+
 			if !f.IsBlockVolumeStorageClassAvailable() {
 				Skip("Storage Class for block volume is not available")
 			}
+
+			log("creating source dv ...")
 			source := createSource(defaultSize, corev1.PersistentVolumeBlock)
+
+			log("creating volume clone source...")
 			createDataSource()
+
 			if webhookRendering {
 				target = createIncompleteTarget(nil, corev1.PersistentVolumeFilesystem, "", utils.DefaultStorageClass.GetName())
 			} else {
