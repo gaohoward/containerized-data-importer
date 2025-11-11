@@ -196,6 +196,7 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
 	if targetVolumeMode := cc.GetVolumeMode(claim); targetVolumeMode == corev1.PersistentVolumeFilesystem {
+		p.Log.Info("target pvc is filesystem", "claim", claim.Name)
 		// It is possible when the source pvc has VolumMode 'block'
 		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
 		sourcePvc := &corev1.PersistentVolumeClaim{}
@@ -205,10 +206,15 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			return nil, err
 		}
 
+		p.Log.Info("retrieved source pvc", "source", sourcePvc.Name)
+
 		if claim.Spec.Resources.Requests != nil {
 			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			p.Log.Info("target has resource requests", "size", size)
+
 			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+				p.Log.Info("source pvc volumeMode is filesystem")
 				// Get the datavolume associate with the source
 				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
 					if dv != nil {
@@ -230,24 +236,32 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 					inflate = false
 				}
 			} else {
+				p.Log.Info("source volume is block, check size")
 				// If the source PVC is block, we need to account for the overhead
 				if usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim); err == nil {
+					p.Log.Info("target usable size", "size", usableSpace, "src size", size)
 					if usableSpace.Cmp(size) >= 0 {
+						p.Log.Info("target has enough usable space, not to inflate")
 						inflate = false
 					}
 				} else {
+					p.Log.Info("can't determine usable space, not to inflate")
 					inflate = false
 				}
 			}
 			if inflate {
+				p.Log.Info("inflating target size")
 				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, size.Value(), &claim.Spec)
 				if err != nil {
 					return nil, err
 				}
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
 			} else {
+				p.Log.Info("setting target size to source size")
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = size
 			}
+
+			p.Log.Info("final target size", "size", claim.Spec.Resources.Requests[corev1.ResourceStorage])
 		}
 	}
 
