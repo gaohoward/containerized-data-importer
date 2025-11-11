@@ -256,9 +256,6 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 					return nil, err
 				}
 				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
-			} else {
-				p.Log.Info("setting target size to source size")
-				claim.Spec.Resources.Requests[corev1.ResourceStorage] = size
 			}
 
 			p.Log.Info("final target size", "size", claim.Spec.Resources.Requests[corev1.ResourceStorage])
