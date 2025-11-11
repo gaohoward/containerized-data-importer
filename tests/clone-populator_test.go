@@ -299,7 +299,7 @@ var _ = Describe("Clone Populator tests", func() {
 			Expect(targetHash).To(Equal(sourceHash))
 		})
 
-		FDescribeTable("should do block to filesystem clone", func(webhookRendering bool) {
+		DescribeTable("should do block to filesystem clone", func(webhookRendering bool) {
 
 			log("in testing with webhookRendering %v", webhookRendering)
 
