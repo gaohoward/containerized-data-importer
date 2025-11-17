@@ -2249,6 +2249,7 @@ func GetDVFromPVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVo
 		if !k8serrors.IsNotFound(err) {
 			return nil, err
 		}
+		return nil, nil
 	}
 	return dv, nil
 }
