@@ -195,6 +195,8 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
+	// The purpose of this check is to make sure the target PVC to have sufficient space
+	// before the cloning actually happens.
 	if targetVolumeMode := cc.GetVolumeMode(claim); targetVolumeMode == corev1.PersistentVolumeFilesystem {
 		// It is possible when the source pvc has VolumMode 'block'
 		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
@@ -210,33 +212,31 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 			inflate := true
 			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
 				// Get the datavolume associate with the source
-				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err == nil {
-					if dv != nil {
-						if sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv); err == nil {
-							// If the source PVC is filesystem, just directly compare
-							targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
-							if targetSize.Cmp(*sourceSize) >= 0 {
-								// the target size has enough space, not to inflate
-								inflate = false
-							}
-						} else {
+				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err != nil {
+					return nil, err
+				} else if dv != nil {
+					if sourceSize, err := cc.GetDVCloneSize(ctx, p.Client, dv); err != nil {
+						return nil, err
+					} else {
+						// If the source PVC is filesystem, just directly compare
+						targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+						if targetSize.Cmp(*sourceSize) >= 0 {
+							// the target size has enough space, not to inflate
 							inflate = false
 						}
-					} else {
-						// can't determine the overhead, assuming size is correct
-						inflate = false
 					}
 				} else {
+					// dv not found, just leave the size as is
 					inflate = false
 				}
 			} else {
 				// If the source PVC is block, we need to account for the overhead
-				if usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim); err == nil {
+				if usableSpace, err := cc.GetUsableSpace(ctx, p.Client, claim); err != nil {
+					return nil, err
+				} else {
 					if usableSpace.Cmp(size) >= 0 {
 						inflate = false
 					}
-				} else {
-					inflate = false
 				}
 			}
 			if inflate {
