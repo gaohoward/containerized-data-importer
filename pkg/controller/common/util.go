@@ -2338,39 +2338,55 @@ func GetUsableSpace(ctx context.Context, c client.Client, pvc *corev1.Persistent
 	return sizeRequest, nil
 }
 
-func GetDVFromPVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) (*cdiv1.DataVolume, error) {
-	dv := &cdiv1.DataVolume{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: pvc.Namespace, Name: pvc.Name}, dv); err != nil {
-		if !k8serrors.IsNotFound(err) {
-			return nil, err
-		}
-		return nil, nil
+func GetPVCDataSourceKind(pvc *corev1.PersistentVolumeClaim) string {
+	pvcDataSource := pvc.Spec.DataSource
+	pvcDataSourceRef := pvc.Spec.DataSourceRef
+	if pvcDataSourceRef != nil {
+		return pvcDataSourceRef.Kind
 	}
-	return dv, nil
+	if pvcDataSource != nil {
+		return pvcDataSource.Kind
+	}
+	return ""
 }
 
-func GetDVCloneSize(ctx context.Context, c client.Client, dv *cdiv1.DataVolume) (*resource.Quantity, error) {
-	if dv.Spec.Source != nil {
-		snapshot := &snapshotv1.VolumeSnapshot{}
-		if snapshotKey := dv.Spec.Source.Snapshot; snapshotKey != nil {
-			if err := c.Get(ctx, types.NamespacedName{Namespace: snapshotKey.Namespace, Name: snapshotKey.Name}, snapshot); err != nil {
-				return nil, err
-			}
-			if snapshot.Status != nil && snapshot.Status.ReadyToUse != nil && *snapshot.Status.ReadyToUse {
-				if snapshot.Status.RestoreSize != nil {
-					return snapshot.Status.RestoreSize, nil
-				}
-				return nil, fmt.Errorf("snapshot %s doesn't have a restore size specified in its status", snapshot.Name)
-			}
-			return nil, fmt.Errorf("snapshot %s is not ready", snapshot.Name)
-		}
-		if pvcKey := dv.Spec.Source.PVC; pvcKey != nil {
-			pvc := &corev1.PersistentVolumeClaim{}
-			if err := c.Get(ctx, types.NamespacedName{Namespace: pvcKey.Namespace, Name: pvcKey.Name}, pvc); err != nil {
-				return nil, err
-			}
-			return pvc.Status.Capacity.Storage(), nil
+// In host clone the source PVC comes from 2 sources
+// 1. snaphot clone - in this case there is no DV associated with the sourcePVC
+// 2. direct PVC clone - in this case there may be a DV associated with the sourcePVC
+func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) *cdiv1.DataVolume {
+	pvcDataSourceKind := GetPVCDataSourceKind(pvc)
+
+	if pvcDataSourceKind != "PersistentVolumeClaim" {
+		return nil
+	}
+
+	// if the pvc is from a DV, it will have the following annotation
+	// cdi.kubevirt.io/createdForDataVolume
+	// and the value is the DV's UID
+	createdForDVUID, ok := pvc.Annotations[AnnCreatedForDataVolume]
+	if !ok || createdForDVUID == "" {
+		return nil
+	}
+
+	// list all DVs in the pvc's namespace and find the one with matching UID
+	dvList := &cdiv1.DataVolumeList{}
+	if err := c.List(ctx, dvList, client.InNamespace(pvc.Namespace)); err != nil {
+		return nil
+	}
+	for _, dv := range dvList.Items {
+		if string(dv.UID) == createdForDVUID {
+			return &dv
 		}
 	}
-	return nil, fmt.Errorf("dataVolume %s does not have a clone source", dv.Name)
+	return nil
+}
+
+func GetHostCloneOriginalSourceDVSize(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) resource.Quantity {
+	// Get the datavolume associate with the source
+	dv := GetDVFromHostCloneSourcePVC(ctx, c, pvc)
+	size := resource.Quantity{}
+	if dv != nil {
+		size = dv.Spec.PVC.Resources.Requests[corev1.ResourceStorage]
+	}
+	return size
 }

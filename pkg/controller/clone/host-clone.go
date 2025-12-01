@@ -202,61 +202,8 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 	cc.AddLabel(claim, cc.LabelExcludeFromVeleroBackup, "true")
 
-	// The purpose of this check is to make sure the target PVC to have sufficient space
-	// before the cloning actually happens.
-	if targetVolumeMode := cc.GetVolumeMode(claim); targetVolumeMode == corev1.PersistentVolumeFilesystem {
-		// It is possible when the source pvc has VolumMode 'block'
-		// and the claim has 'filesystem' in which case the filesystem overhead need to be considered
-		sourcePvc := &corev1.PersistentVolumeClaim{}
-		sourcePvcKey := client.ObjectKey{Namespace: p.Namespace, Name: p.SourceName}
-
-		if err := p.Client.Get(ctx, sourcePvcKey, sourcePvc); err != nil {
-			return nil, err
-		}
-
-		if claim.Spec.Resources.Requests != nil {
-			size := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
-			inflate := true
-			if sourceVolumeMode := cc.GetVolumeMode(sourcePvc); sourceVolumeMode == corev1.PersistentVolumeFilesystem {
-				// Get the datavolume associate with the source
-				if dv, err := cc.GetDVFromPVC(ctx, p.Client, sourcePvc); err != nil {
-					return nil, err
-				} else if dv != nil {
-					var sourceSize *resource.Quantity
-					if sourceSize, err = cc.GetDVCloneSize(ctx, p.Client, dv); err != nil {
-						// if any error happens, don't inflate
-						inflate = false
-					} else {
-						// If the source PVC is filesystem, just directly compare
-						targetSize := claim.Spec.Resources.Requests[corev1.ResourceStorage]
-						if targetSize.Cmp(*sourceSize) >= 0 {
-							// the target size has enough space, not to inflate
-							inflate = false
-						}
-					}
-				} else {
-					// dv not found, just leave the size as is
-					inflate = false
-				}
-			} else {
-				// If the source PVC is block, we need to account for the overhead
-				var usableSpace resource.Quantity
-				var err error
-				if usableSpace, err = cc.GetUsableSpace(ctx, p.Client, claim); err != nil {
-					return nil, err
-				}
-				if usableSpace.Cmp(size) >= 0 {
-					inflate = false
-				}
-			}
-			if inflate {
-				newUsableSpace, err := cc.InflateSizeWithOverhead(ctx, p.Client, size.Value(), &claim.Spec)
-				if err != nil {
-					return nil, err
-				}
-				claim.Spec.Resources.Requests[corev1.ResourceStorage] = newUsableSpace
-			}
-		}
+	if err := p.MakeSureTargetPVCHasSufficientSpace(ctx, claim); err != nil {
+		return nil, err
 	}
 
 	if err := p.Client.Create(ctx, claim); err != nil {
@@ -265,6 +212,68 @@ func (p *HostClonePhase) createClaim(ctx context.Context) (*corev1.PersistentVol
 	}
 
 	return claim, nil
+}
+
+// The purpose of this check is to make sure the target PVC to have sufficient space
+// before the cloning actually happens.
+func (p *HostClonePhase) MakeSureTargetPVCHasSufficientSpace(ctx context.Context, targetPvc *corev1.PersistentVolumeClaim) error {
+
+	sourcePvc := &corev1.PersistentVolumeClaim{}
+	sourcePvcKey := client.ObjectKey{Namespace: p.Namespace, Name: p.SourceName}
+
+	if err := p.Client.Get(ctx, sourcePvcKey, sourcePvc); err != nil {
+		return err
+	}
+	if targetPvc.Spec.Resources.Requests != nil {
+		unInflatedSourceSize := sourcePvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		inflate := false
+		sourceVolumeMode := cc.GetVolumeMode(sourcePvc)
+		targetVolumeMode := cc.GetVolumeMode(targetPvc)
+		var err error
+
+		// For filesystem source PVCs, we need to get the original DV size to account for
+		if sourceVolumeMode == corev1.PersistentVolumeFilesystem {
+			original := cc.GetHostCloneOriginalSourceDVSize(ctx, p.Client, sourcePvc)
+			if !original.IsZero() {
+				unInflatedSourceSize = original
+			}
+		}
+
+		targetSize := targetPvc.Spec.Resources.Requests[corev1.ResourceStorage]
+
+		if unInflatedSourceSize.Cmp(targetSize) > 0 {
+			targetSize = unInflatedSourceSize
+			// if both target and source have same volume mode, take a original size if target is smaller
+			// no need to inflate
+
+			// if filesystem to block, inflate original size if block size is smaller
+			if sourceVolumeMode == corev1.PersistentVolumeFilesystem && targetVolumeMode == corev1.PersistentVolumeBlock {
+				inflate = true
+			}
+		}
+
+		// if block to filesystem, inflate the original size if target is smaller
+		// need to take the filesystem overhead into account when comparing sizes
+		if sourceVolumeMode == corev1.PersistentVolumeBlock && targetVolumeMode == corev1.PersistentVolumeFilesystem {
+			var usableSpace resource.Quantity
+			var err error
+			if usableSpace, err = cc.GetUsableSpace(ctx, p.Client, targetPvc); err != nil {
+				return err
+			}
+			if unInflatedSourceSize.Cmp(usableSpace) > 0 {
+				inflate = true
+			}
+		}
+
+		if inflate {
+			targetSize, err = cc.InflateSizeWithOverhead(ctx, p.Client, unInflatedSourceSize.Value(), &targetPvc.Spec)
+			if err != nil {
+				return err
+			}
+		}
+		targetPvc.Spec.Resources.Requests[corev1.ResourceStorage] = targetSize
+	}
+	return nil
 }
 
 func (p *HostClonePhase) hostCloneComplete(pvc *corev1.PersistentVolumeClaim) bool {
