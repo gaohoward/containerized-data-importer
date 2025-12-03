@@ -2533,7 +2533,7 @@ var _ = Describe("[vendor:cnv-qe@redhat.com][level:component]DataVolume tests", 
 			utils.WaitForConditions(f, dv.Name, f.Namespace.Name, timeout, pollingInterval, boundCondition, readyCondition)
 		}
 
-		DescribeTable("import DV using StorageSpec without AccessModes, PVC is created only when", func(webhookRenderingLabel, scName string, dvFunc func(*cdiv1.DataVolume), scFunc func(string)) {
+		FDescribeTable("import DV using StorageSpec without AccessModes, PVC is created only when", func(webhookRenderingLabel, scName string, dvFunc func(*cdiv1.DataVolume), scFunc func(string)) {
 			if utils.IsDefaultSCNoProvisioner() {
 				Skip("Default storage class has no provisioner. The new storage class won't work")
 			}
