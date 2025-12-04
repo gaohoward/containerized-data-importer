@@ -2320,24 +2320,6 @@ func CopyEvents(srcPVC, targetPVC client.Object, c client.Client, recorder recor
 	}
 }
 
-func GetUsableSpace(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) (resource.Quantity, error) {
-	sizeRequest := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	volumeMode := util.ResolveVolumeMode(pvc.Spec.VolumeMode)
-
-	if volumeMode == corev1.PersistentVolumeFilesystem {
-		fsOverhead, err := GetFilesystemOverheadForStorageClass(ctx, c, pvc.Spec.StorageClassName)
-		if err != nil {
-			return resource.Quantity{}, err
-		}
-		fsOverheadFloat, _ := strconv.ParseFloat(string(fsOverhead), 64)
-		usableSpaceRaw := util.GetUsableSpace(fsOverheadFloat, sizeRequest.Value())
-
-		return *resource.NewScaledQuantity(usableSpaceRaw, 0), nil
-	}
-
-	return sizeRequest, nil
-}
-
 func GetPVCDataSourceKind(pvc *corev1.PersistentVolumeClaim) string {
 	pvcDataSource := pvc.Spec.DataSource
 	pvcDataSourceRef := pvc.Spec.DataSourceRef
@@ -2353,11 +2335,11 @@ func GetPVCDataSourceKind(pvc *corev1.PersistentVolumeClaim) string {
 // In host clone the source PVC comes from 2 sources
 // 1. snaphot clone - in this case there is no DV associated with the sourcePVC
 // 2. direct PVC clone - in this case there may be a DV associated with the sourcePVC
-func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) *cdiv1.DataVolume {
+func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) (*cdiv1.DataVolume, error) {
 	pvcDataSourceKind := GetPVCDataSourceKind(pvc)
 
 	if pvcDataSourceKind != "PersistentVolumeClaim" {
-		return nil
+		return nil, nil
 	}
 
 	// if the pvc is from a DV, it will have the following annotation
@@ -2365,28 +2347,38 @@ func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *core
 	// and the value is the DV's UID
 	createdForDVUID, ok := pvc.Annotations[AnnCreatedForDataVolume]
 	if !ok || createdForDVUID == "" {
-		return nil
+		return nil, nil
 	}
 
-	// list all DVs in the pvc's namespace and find the one with matching UID
-	dvList := &cdiv1.DataVolumeList{}
-	if err := c.List(ctx, dvList, client.InNamespace(pvc.Namespace)); err != nil {
-		return nil
-	}
-	for _, dv := range dvList.Items {
-		if string(dv.UID) == createdForDVUID {
-			return &dv
+	dvName := ""
+	for _, ownerRef := range pvc.GetOwnerReferences() {
+		if ownerRef.Kind == "DataVolume" && ownerRef.APIVersion == "cdi.kubevirt.io/v1beta1" {
+			dvName = ownerRef.Name
+			break
 		}
 	}
-	return nil
+	if dvName != "" {
+		dv := &cdiv1.DataVolume{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: pvc.Namespace, Name: dvName}, dv); err != nil {
+			if k8serrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return dv, nil
+	}
+	return nil, nil
 }
 
-func GetHostCloneOriginalSourceDVSize(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) resource.Quantity {
+func GetHostCloneOriginalSourceDVSize(ctx context.Context, c client.Client, pvc *corev1.PersistentVolumeClaim) (resource.Quantity, error) {
 	// Get the datavolume associate with the source
-	dv := GetDVFromHostCloneSourcePVC(ctx, c, pvc)
+	dv, err := GetDVFromHostCloneSourcePVC(ctx, c, pvc)
+	if err != nil {
+		return resource.Quantity{}, err
+	}
 	size := resource.Quantity{}
 	if dv != nil {
 		size = dv.Spec.PVC.Resources.Requests[corev1.ResourceStorage]
 	}
-	return size
+	return size, nil
 }
