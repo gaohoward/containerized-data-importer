@@ -2342,14 +2342,6 @@ func GetDVFromHostCloneSourcePVC(ctx context.Context, c client.Client, pvc *core
 		return nil, nil
 	}
 
-	// if the pvc is from a DV, it will have the following annotation
-	// cdi.kubevirt.io/createdForDataVolume
-	// and the value is the DV's UID
-	createdForDVUID, ok := pvc.Annotations[AnnCreatedForDataVolume]
-	if !ok || createdForDVUID == "" {
-		return nil, nil
-	}
-
 	dvName := ""
 	for _, ownerRef := range pvc.GetOwnerReferences() {
 		if ownerRef.Kind == "DataVolume" && ownerRef.APIVersion == "cdi.kubevirt.io/v1beta1" {

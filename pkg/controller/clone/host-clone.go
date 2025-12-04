@@ -254,6 +254,10 @@ func (p *HostClonePhase) MakeSureTargetPVCHasSufficientSpace(ctx context.Context
 
 	// if target is filesystem, inflate the original size if target
 	if targetVolumeMode == corev1.PersistentVolumeFilesystem {
+		// when only sourc pvc size is available (snapshot case) we have no
+		// way to trace back to its original DV size (because the DV probably
+		// doesn't exist anymore), so we use source pvc size to just inflate
+		// the target size with overhead
 		targetSize, err = cc.InflateSizeWithOverhead(ctx, p.Client, unInflatedSourceSize.Value(), &targetPvc.Spec)
 		if err != nil {
 			return err

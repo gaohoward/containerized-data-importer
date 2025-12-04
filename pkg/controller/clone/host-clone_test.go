@@ -42,8 +42,8 @@ var _ = Describe("HostClonePhase test", func() {
 	log := logf.Log.WithName("host-clone-phase-test")
 
 	type ResourceModifier struct {
-		modifySourcePvc  func(pvcSpec *corev1.PersistentVolumeClaimSpec)
-		modifyDesiredPvc func(pvcSpec *corev1.PersistentVolumeClaimSpec)
+		modifySourcePvc  func(pvcSpec *corev1.PersistentVolumeClaim)
+		modifyDesiredPvc func(pvc *corev1.PersistentVolumeClaim)
 	}
 
 	creatHostClonePhase := func(modifier *ResourceModifier, objects ...runtime.Object) *HostClonePhase {
@@ -60,7 +60,7 @@ var _ = Describe("HostClonePhase test", func() {
 		}
 
 		if modifier != nil && modifier.modifySourcePvc != nil {
-			modifier.modifySourcePvc(&source.Spec)
+			modifier.modifySourcePvc(source)
 		}
 
 		objects = append(objects, source)
@@ -87,10 +87,17 @@ var _ = Describe("HostClonePhase test", func() {
 				Namespace: "ns",
 				Name:      "desired",
 			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse("1Gi"),
+					},
+				},
+			},
 		}
 
 		if modifier != nil && modifier.modifyDesiredPvc != nil {
-			modifier.modifyDesiredPvc(&desired.Spec)
+			modifier.modifyDesiredPvc(desired)
 		}
 
 		return &HostClonePhase{
@@ -151,6 +158,25 @@ var _ = Describe("HostClonePhase test", func() {
 		Expect(pvc.Annotations[cc.AnnPriorityClassName]).To(Equal("priority"))
 	})
 
+	It("should get error if target pvc does not have size", func() {
+		makePvcSizeMissing := func(pvc *corev1.PersistentVolumeClaim, _ corev1.PersistentVolumeMode) {
+			pvc.Spec = corev1.PersistentVolumeClaimSpec{}
+		}
+		cdiConfig := cc.MakeEmptyCDIConfigSpec(common.ConfigName)
+		cdiConfig.Status.FilesystemOverhead = &cdiv1.FilesystemOverhead{
+			Global: common.DefaultGlobalOverhead,
+		}
+
+		p := creatHostClonePhase(&ResourceModifier{
+			modifyDesiredPvc: func(pvc *corev1.PersistentVolumeClaim) {
+				makePvcSizeMissing(pvc, corev1.PersistentVolumeFilesystem)
+			},
+		}, cdiConfig)
+
+		_, err := p.Reconcile(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+	})
+
 	It("should adjust requested size for block to filesystem volume mode clone", func() {
 		setPvcAttributes := func(pvcSpec *corev1.PersistentVolumeClaimSpec, volumeMode corev1.PersistentVolumeMode, storage string) {
 			pvcSpec.VolumeMode = &volumeMode
@@ -165,11 +191,11 @@ var _ = Describe("HostClonePhase test", func() {
 		}
 
 		p := creatHostClonePhase(&ResourceModifier{
-			modifySourcePvc: func(pvcSpec *corev1.PersistentVolumeClaimSpec) {
-				setPvcAttributes(pvcSpec, corev1.PersistentVolumeBlock, "8Gi")
+			modifySourcePvc: func(pvc *corev1.PersistentVolumeClaim) {
+				setPvcAttributes(&pvc.Spec, corev1.PersistentVolumeBlock, "8Gi")
 			},
-			modifyDesiredPvc: func(pvcSpec *corev1.PersistentVolumeClaimSpec) {
-				setPvcAttributes(pvcSpec, corev1.PersistentVolumeFilesystem, "8Gi")
+			modifyDesiredPvc: func(pvc *corev1.PersistentVolumeClaim) {
+				setPvcAttributes(&pvc.Spec, corev1.PersistentVolumeFilesystem, "8Gi")
 			},
 		}, cdiConfig)
 
@@ -188,7 +214,7 @@ var _ = Describe("HostClonePhase test", func() {
 		Expect(actualSize.Cmp(originalRequested)).To(BeNumerically(">", 0), "The actual should be greater than the requested", "actual", actualSize, "requested", originalRequested)
 	})
 
-	It("should use the same requested size for filesystem to filesystem volume mode clone", func() {
+	It("should inflate the target size for filesystem to filesystem volume mode clone", func() {
 		setPvcAttributes := func(pvcSpec *corev1.PersistentVolumeClaimSpec, volumeMode corev1.PersistentVolumeMode, storage string) {
 			pvcSpec.VolumeMode = &volumeMode
 			if pvcSpec.Resources.Requests == nil {
@@ -202,11 +228,11 @@ var _ = Describe("HostClonePhase test", func() {
 		}
 
 		p := creatHostClonePhase(&ResourceModifier{
-			modifySourcePvc: func(pvcSpec *corev1.PersistentVolumeClaimSpec) {
-				setPvcAttributes(pvcSpec, corev1.PersistentVolumeFilesystem, "8Gi")
+			modifySourcePvc: func(pvc *corev1.PersistentVolumeClaim) {
+				setPvcAttributes(&pvc.Spec, corev1.PersistentVolumeFilesystem, "8Gi")
 			},
-			modifyDesiredPvc: func(pvcSpec *corev1.PersistentVolumeClaimSpec) {
-				setPvcAttributes(pvcSpec, corev1.PersistentVolumeFilesystem, "8Gi")
+			modifyDesiredPvc: func(pvc *corev1.PersistentVolumeClaim) {
+				setPvcAttributes(&pvc.Spec, corev1.PersistentVolumeFilesystem, "8Gi")
 			},
 		}, cdiConfig)
 
@@ -222,7 +248,7 @@ var _ = Describe("HostClonePhase test", func() {
 		actualSize := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 		originalRequested := resource.MustParse("8Gi")
 
-		Expect(actualSize.Cmp(originalRequested)).To(BeNumerically("==", 0), "The actual should be equal to the requested", "actual", actualSize, "requested", originalRequested)
+		Expect(actualSize.Cmp(originalRequested)).To(BeNumerically(">", 0), "The actual should be greater than the requested", "actual", actualSize, "requested", originalRequested)
 	})
 
 	Context("with desired claim created", func() {
