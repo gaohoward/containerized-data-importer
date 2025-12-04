@@ -174,7 +174,8 @@ var _ = Describe("HostClonePhase test", func() {
 		}, cdiConfig)
 
 		_, err := p.Reconcile(context.Background())
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no target resource request specified"))
 	})
 
 	It("should adjust requested size for block to filesystem volume mode clone", func() {
