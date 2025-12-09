@@ -249,7 +249,7 @@ func (p *HostClonePhase) MakeSureTargetPVCHasSufficientSpace(ctx context.Context
 	}
 
 	targetSizeUpdated := false
-	if unInflatedSourceSize.Cmp(targetSize) > 0 {
+	if unInflatedSourceSize.Cmp(targetSize) >= 0 {
 		targetSizeUpdated = true
 		targetSize = unInflatedSourceSize
 	}
