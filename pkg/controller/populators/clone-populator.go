@@ -288,6 +288,8 @@ func (r *ClonePopulatorReconciler) Reconcile(ctx context.Context, req reconcile.
 }
 
 func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log logr.Logger, pvc *corev1.PersistentVolumeClaim, statusOnly bool) (reconcile.Result, error) {
+
+	log.Info("kkkk clone-populator reconcilePending")
 	ready, _, err := claimReadyForPopulation(ctx, r.client, pvc)
 	if err != nil {
 		return reconcile.Result{}, r.updateClonePhaseError(ctx, log, pvc, err)
@@ -321,6 +323,11 @@ func (r *ClonePopulatorReconciler) reconcilePending(ctx context.Context, log log
 		log.V(3).Info("unable to choose clone strategy now")
 		// TODO maybe create index/watch to deal with this
 		return reconcile.Result{RequeueAfter: 5 * time.Second}, r.updateClonePhasePending(ctx, log, pvc)
+	}
+
+	log.Info("kkkk got strategy", "strategy", csr.Strategy)
+	if csr.FallbackReason != nil {
+		log.Info("kkkk fallback reason", "msg", *csr.FallbackReason)
 	}
 
 	updated, err := r.initTargetClaim(ctx, log, pvc, vcs, csr)
