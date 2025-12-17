@@ -182,6 +182,7 @@ func (r *SnapshotCloneReconciler) sync(log logr.Logger, req reconcile.Request) (
 }
 
 func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconcile.Request) (dvSyncState, error) {
+	log.Info("mmmm In snapshotCloneReconciler, call syncCommon...")
 	syncRes, syncErr := r.syncCommon(log, req, r.cleanup, r.prepare)
 	if syncErr != nil || syncRes.result != nil {
 		return syncRes, syncErr
@@ -193,34 +194,51 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 
 	staticProvisionPending := checkStaticProvisionPending(pvc, datavolume)
 	_, prePopulated := datavolume.Annotations[cc.AnnPrePopulated]
+
+	log.Info("mmmm call pvcRequirework")
 	requiresWork, err := r.pvcRequiresWork(pvc, datavolume)
 	if err != nil {
+		log.Info("mmmm got error from pvcRequireWork, return err")
 		return syncRes, err
 	}
 
+	log.Info("mmmm require work?", "val", requiresWork)
+
 	if !requiresWork || prePopulated || staticProvisionPending {
+		log.Info("mmmm return as no work needed", "requirework?", requiresWork, "prepopulated?", prePopulated, "staticPro?", staticProvisionPending)
 		return syncRes, nil
 	}
 
+	log.Info("mmmm now go on ensure token")
+
 	if addedToken, err := r.ensureExtendedTokenDV(datavolume); err != nil {
+		log.Info("mmmm error add token, return")
 		return syncRes, err
 	} else if addedToken {
 		// make sure token gets persisted before doing anything else
+		log.Info("mmmm token just added, return for another loop")
 		return syncRes, nil
 	}
 
 	if pvc == nil {
+		log.Info("mmmm pvc nil up to this point (?), go validateClone...")
 		// Check if source snapshot exists and do proper validation before attempting to clone
 		if done, err := r.validateCloneAndSourceSnapshot(&syncRes); err != nil || !done {
+			log.Info("mmmm err in validation snapshot, return", "done", done, "err", err)
 			return syncRes, err
 		}
 
+		log.Info("mmmm check dv storeage")
 		if datavolume.Spec.Storage != nil {
+			log.Info("mmmm has storage, detect size")
 			err := r.detectCloneSize(log, &syncRes)
 			if err != nil {
+				log.Info("mmmm error detect, return")
 				return syncRes, err
 			}
 		}
+
+		log.Info("mmmm check usepopulator", "use?", syncRes.usePopulator)
 
 		pvcModifier := r.updateAnnotations
 		if syncRes.usePopulator {
@@ -232,10 +250,13 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 			}
 			pvcModifier = r.updatePVCForPopulation
 		} else {
+			log.Info("initLegacyClone, shouldn't happen at this moment?")
 			if err := r.initLegacyClone(&syncRes); err != nil {
 				return syncRes, err
 			}
 		}
+
+		log.Info("mmmm now createPVCforDataVolume")
 
 		targetPvc, err := r.createPvcForDatavolume(datavolume, pvcSpec, pvcModifier)
 		if err != nil {
@@ -250,30 +271,42 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 					log.Error(syncErr, "failed to sync DataVolume status with event")
 				}
 			}
+			log.Info("mmmm erro creating pvc", "err", err)
 			return syncRes, err
 		}
+		log.Info("mmmm targPvc created in cluster", "name", targetPvc.GetName())
 		pvc = targetPvc
 	}
 
+	log.Info("mmmm now we have pvc go on", "usepopulator", syncRes.usePopulator)
+
 	if syncRes.usePopulator {
+		log.Info("mmmm using populator, create the VolumeCloneSource")
 		if err := r.reconcileVolumeCloneSourceCR(&syncRes); err != nil {
+			log.Info("mmmm error create vcs, return")
 			return syncRes, err
 		}
 
 		ct, ok := pvc.Annotations[cc.AnnCloneType]
 		if ok {
+			log.Info("mmmm pvc has cloneType, add to dv also", "type", ct)
 			cc.AddAnnotation(datavolume, cc.AnnCloneType, ct)
 		}
 	} else {
+		log.Info("mmmm not using populator, fallback to hostassisted!")
 		cc.AddAnnotation(datavolume, cc.AnnCloneType, string(cdiv1.CloneStrategyHostAssisted))
 		if err := r.fallbackToHostAssisted(pvc); err != nil {
 			return syncRes, err
 		}
 	}
 
+	log.Info("mmmm ensure token...")
 	if err := r.ensureExtendedTokenPVC(datavolume, pvc); err != nil {
+		log.Info("mmmm error ensure token, return")
 		return syncRes, err
 	}
+
+	log.Info("end of syncSnapshotClone", "anyerror?", syncErr)
 
 	return syncRes, syncErr
 }

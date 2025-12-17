@@ -82,43 +82,62 @@ func RenderPvc(ctx context.Context, client client.Client, pvc *v1.PersistentVolu
 
 // renderPvcSpec creates a new PVC Spec based on either the dv.spec.pvc or dv.spec.storage section
 func renderPvcSpec(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
+	log.Info("In renderPvcSpec()")
 	if dv.Spec.PVC != nil {
+		log.Info("dv has pvc, just return it")
 		return dv.Spec.PVC.DeepCopy(), nil
 	} else if dv.Spec.Storage != nil {
+		log.Info("dv has storage, call pvcFromStorage")
 		return pvcFromStorage(client, recorder, log, dv, pvc)
 	}
 
+	log.Info("error because neither pvc nor storage presents, return err")
 	return nil, errors.Errorf("datavolume one of {pvc, storage} field is required")
 }
 
 func pvcFromStorage(client client.Client, recorder record.EventRecorder, log logr.Logger, dv *cdiv1.DataVolume, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaimSpec, error) {
 	var pvcSpec *v1.PersistentVolumeClaimSpec
 
+	log.Info("In pvcFromStorage, checking if pvc is enabled")
 	isWebhookRenderingEnabled, err := featuregates.IsWebhookPvcRenderingEnabled(client)
+
 	if err != nil {
+		log.Info("error checking iswebhook render enabled, return")
 		return nil, err
 	}
 
+	log.Info("webhook enabled check done", "enabled?", isWebhookRenderingEnabled)
+
 	shouldRender := !isWebhookRenderingEnabled || dv.Labels[common.PvcApplyStorageProfileLabel] != "true"
 
+	log.Info("should Render", "should", shouldRender)
+
 	if pvc == nil {
+		log.Info("pvc is nil, copy from storage")
 		pvcSpec = copyStorageAsPvc(dv.Spec.Storage)
 		if shouldRender {
+			log.Info("should render, call render method")
 			if err := renderPvcSpecVolumeModeAndAccessModesAndStorageClass(client, recorder, &log, dv, pvcSpec, dv.Spec.ContentType); err != nil {
+				log.Info("error calling renderPvcSpecVolumeMode..., return")
 				return nil, err
 			}
 		}
 	} else {
+		log.Info("we have pvc, just copy it")
 		pvcSpec = pvc.Spec.DeepCopy()
 	}
 
 	if shouldRender {
+		log.Info("should render true, so call renderPvcSpecVolumeSize")
 		isClone := dv.Spec.Source.PVC != nil || dv.Spec.Source.Snapshot != nil
+		log.Info("Calling renderPvcSpecVolumeSize", "isclone", isClone)
 		if err := renderPvcSpecVolumeSize(client, pvcSpec, isClone, &log); err != nil {
+			log.Info("err render pvcspecvolumesize, return")
 			return nil, err
 		}
 	}
 
+	log.Info("return ok from pvcFromStorage")
 	return pvcSpec, nil
 }
 
@@ -132,6 +151,8 @@ func renderPvcSpecVolumeModeAndAccessModesAndStorageClass(client client.Client, 
 			log.V(1).Info(msg, keysAndValuesWithDv...)
 		}
 	}
+
+	logInfo("In renderPvcSpecVolumeModeAndAccessModesAndStorageClass")
 
 	recordEventf := func(eventtype, reason, messageFmt string, args ...interface{}) {
 		if recorder != nil && dv != nil {
@@ -289,31 +310,46 @@ func hasCloneSourceRef(pvc *v1.PersistentVolumeClaim) bool {
 func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeClaimSpec, isClone bool, log *logr.Logger) error {
 	requestedSize, found := pvcSpec.Resources.Requests[v1.ResourceStorage]
 
+	log.Info("in renderPvcSpecVolumeSize", "found requested?", found)
+
 	// Storage size can be empty when cloning
 	if !found {
+		log.Info("size not found")
 		if !isClone {
+			log.Info("is not clone, return err")
 			return errors.Errorf("PVC Spec is not valid - missing storage size")
 		}
+		log.Info("set pvc request size to zero")
 		setRequestedVolumeSize(pvcSpec, resource.Quantity{})
+		log.Info("ok return")
 		return nil
 	}
 
+	log.Info("ok found it", "size", requestedSize)
 	// Kubevirt doesn't allow disks smaller than 1MiB. Rejecting for consistency.
 	if requestedSize.Value() < units.MiB {
+		log.Info("too tiny, return err")
 		return errors.Errorf("PVC Spec is not valid - storage size should be at least 1MiB")
 	}
 
+	log.Info("calling inflate()...?", "original req size", requestedSize)
 	requestedSize, err := cc.InflateSizeWithOverhead(context.TODO(), client, requestedSize.Value(), pvcSpec)
 	if err != nil {
+		log.Info("error inflation, return err")
 		return err
 	}
+	log.Info("after inflation, the req size", "size", requestedSize)
 
 	if scName := pvcSpec.StorageClassName; scName != nil {
+		log.Info("pvc has storage class, get effect size..", "name", scName)
 		if requestedSize, err = cc.GetEffectiveVolumeSize(context.TODO(), client, requestedSize, *scName, log); err != nil {
+			log.Info("erro get effct size, return err")
 			return err
 		}
+		log.Info("Now the request size", "size", requestedSize)
 	}
 
+	log.Info("setting the size to pvc and return")
 	setRequestedVolumeSize(pvcSpec, requestedSize)
 
 	return nil

@@ -476,6 +476,7 @@ func (r *ReconcilerBase) reconcile(ctx context.Context, req reconcile.Request, d
 type dvSyncStateFunc func(*dvSyncState) error
 
 func (r *ReconcilerBase) syncCommon(log logr.Logger, req reconcile.Request, cleanup, prepare dvSyncStateFunc) (dvSyncState, error) {
+	log.Info("syncCommon, call syncDvPvcState")
 	syncState, err := r.syncDvPvcState(log, req, cleanup, prepare)
 	if err == nil {
 		err = r.syncUpdate(log, &syncState)
@@ -484,21 +485,25 @@ func (r *ReconcilerBase) syncCommon(log logr.Logger, req reconcile.Request, clea
 }
 
 func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, cleanup, prepare dvSyncStateFunc) (dvSyncState, error) {
+	log.Info("syncDvPvcState()")
 	syncState := dvSyncState{}
 	dv, err := r.getDataVolume(req.NamespacedName)
 	if dv == nil || err != nil {
 		syncState.result = &reconcile.Result{}
+		log.Info("dv not found, return")
 		return syncState, err
 	}
 	syncState.dv = dv
 	syncState.dvMutated = dv.DeepCopy()
 	syncState.pvc, err = r.getPVC(req.NamespacedName)
 	if err != nil {
+		log.Info("pvc not found,return")
 		return syncState, err
 	}
 
 	if cleanup != nil {
 		if err := cleanup(&syncState); err != nil {
+			log.Info("clean up error, return")
 			return syncState, err
 		}
 	}
@@ -511,10 +516,12 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 
 	if prepare != nil {
 		if err := prepare(&syncState); err != nil {
+			log.Info("prepare error, return")
 			return syncState, err
 		}
 	}
 
+	log.Info("Calling renderPvcSpec")
 	syncState.pvcSpec, err = renderPvcSpec(r.client, r.recorder, log, syncState.dvMutated, syncState.pvc)
 	if err != nil {
 		if syncErr := r.syncDataVolumeStatusPhaseWithEvent(&syncState, cdiv1.PhaseUnset, nil,
@@ -525,20 +532,30 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 			syncState.result = &reconcile.Result{}
 			return syncState, nil
 		}
+		log.Info("some err caught in renderPvcSpec, return")
 		return syncState, err
 	}
 
+	log.Info("call should use cdi populator")
 	syncState.usePopulator, err = r.shouldUseCDIPopulator(&syncState)
+
 	if err != nil {
+		log.Info("err check use populator, return")
 		return syncState, err
 	}
+
+	log.Info("call updateDataVolumeUseCDIPopulator", "usePopulator?", syncState.usePopulator)
 	updateDataVolumeUseCDIPopulator(&syncState)
 
+	log.Info("Handl static volume")
 	if err := r.handleStaticVolume(&syncState, log); err != nil || syncState.result != nil {
+		log.Info("handle static vol error, reutrn")
 		return syncState, err
 	}
 
+	log.Info("handle delayed annos")
 	if err := r.handleDelayedAnnotations(&syncState, log); err != nil || syncState.result != nil {
+		log.Info("handle delayed anno err, return")
 		return syncState, err
 	}
 
@@ -547,11 +564,16 @@ func (r *ReconcilerBase) syncDvPvcState(log logr.Logger, req reconcile.Request, 
 	}
 
 	if syncState.pvc != nil {
+		log.Info("Now valid pvc")
 		if err := r.validatePVC(dv, syncState.pvc); err != nil {
+			log.Info("failed to valide pvc, return", "error", err)
 			return syncState, err
 		}
+		log.Info("Handle prepopulation")
 		r.handlePrePopulation(syncState.dvMutated, syncState.pvc)
 	}
+
+	log.Info("done syncDvPvcState, all good")
 
 	return syncState, nil
 }
