@@ -367,6 +367,7 @@ func (r *CloneReconcilerBase) reconcileVolumeCloneSourceCR(syncState *dvSyncStat
 		if !k8serrors.IsAlreadyExists(err) {
 			return err
 		}
+	} else {
 		bts, err := yaml.Marshal(volumeCloneSource)
 		if err != nil {
 			debug("error marshal yaml %v", err)
