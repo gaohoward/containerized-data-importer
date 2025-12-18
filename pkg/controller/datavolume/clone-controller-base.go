@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"sigs.k8s.io/yaml"
 
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"kubevirt.io/containerized-data-importer/pkg/controller/clone"
@@ -366,6 +367,12 @@ func (r *CloneReconcilerBase) reconcileVolumeCloneSourceCR(syncState *dvSyncStat
 		if !k8serrors.IsAlreadyExists(err) {
 			return err
 		}
+		bts, err := yaml.Marshal(volumeCloneSource)
+		if err != nil {
+			debug("error marshal yaml %v", err)
+		}
+		vcsYaml := string(bts)
+		debug("Created volumeclonesource %s", vcsYaml)
 	}
 
 	return nil
