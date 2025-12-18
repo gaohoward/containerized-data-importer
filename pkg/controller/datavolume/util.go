@@ -61,21 +61,39 @@ var (
 	ErrStorageClassNotFound = errors.New(MessageErrStorageClassNotFound)
 )
 
+func debug(fmtString string, args ...any) {
+	fmt.Printf("[debug] "+fmtString+"\n", args...)
+}
+
 // RenderPvc renders the PVC according to StorageProfiles
 func RenderPvc(ctx context.Context, client client.Client, pvc *v1.PersistentVolumeClaim) error {
+
+	debug("in RenderPvc with pvc: %s", pvc.Name)
+
 	if pvc.Spec.VolumeMode != nil &&
 		*pvc.Spec.VolumeMode == cdiv1.PersistentVolumeFromStorageProfile {
+		debug("setting volume mode to nil because")
 		pvc.Spec.VolumeMode = nil
 	}
 
+	debug("getting pvc content type")
+
 	dvContentType := cc.GetPVCContentType(pvc)
+
+	debug("content type is %v", dvContentType)
+
 	if err := renderPvcSpecVolumeModeAndAccessModesAndStorageClass(client, nil, nil, nil, &pvc.Spec, dvContentType); err != nil {
 		return err
 	}
 
+	debug("checking hasCloneSourceRef")
+
 	if hasCloneSourceRef(pvc) {
+		debug("yes it has, go call renderClonePvcVolumeSizeFromSource")
 		return renderClonePvcVolumeSizeFromSource(ctx, client, pvc)
 	}
+
+	debug("no clonse source ref, call renderPvcSpecVolumeSize...")
 
 	return renderPvcSpecVolumeSize(client, &pvc.Spec, false, nil)
 }
@@ -220,17 +238,23 @@ func renderPvcSpecVolumeModeAndAccessModesAndStorageClass(client client.Client, 
 
 func renderClonePvcVolumeSizeFromSource(ctx context.Context, client client.Client, pvc *v1.PersistentVolumeClaim) error {
 	if size, exists := pvc.Spec.Resources.Requests[v1.ResourceStorage]; exists && !size.IsZero() {
+		debug("pvc %s has non-zero size %v, return", pvc.Name, size)
 		return nil
 	}
 
 	if !hasCloneSourceRef(pvc) {
+		debug("pvc doesn't have sourceref, return")
 		return nil
 	}
 
+	debug("find source ns, pvc ns is %s", pvc.Namespace)
 	sourceNamespace, exists := pvc.Annotations[populators.AnnDataSourceNamespace]
 	if !exists {
+		debug("pvc doesnt have sourceNs anno, use pvc")
 		sourceNamespace = pvc.Namespace
 	}
+
+	debug("source namespace %s", sourceNamespace)
 
 	volumeCloneSource := &cdiv1.VolumeCloneSource{}
 	if err := client.Get(ctx, types.NamespacedName{Namespace: sourceNamespace, Name: pvc.Spec.DataSourceRef.Name}, volumeCloneSource); err != nil {
@@ -240,11 +264,13 @@ func renderClonePvcVolumeSizeFromSource(ctx context.Context, client client.Clien
 	source := volumeCloneSource.Spec.Source
 
 	if source.Kind == "VolumeSnapshot" && source.Name != "" {
+		debug("clone source is a snapshot!")
 		sourceSnapshot := &snapshotv1.VolumeSnapshot{}
 		if err := client.Get(ctx, types.NamespacedName{Namespace: sourceNamespace, Name: source.Name}, sourceSnapshot); err != nil {
 			return err
 		}
 		if sourceSnapshot.Status != nil && sourceSnapshot.Status.RestoreSize != nil {
+			debug("set pvc size to restore size %v", *sourceSnapshot.Status.RestoreSize)
 			setRequestedVolumeSize(&pvc.Spec, *sourceSnapshot.Status.RestoreSize)
 		}
 		return nil

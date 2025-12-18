@@ -28,6 +28,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	yaml "sigs.k8s.io/yaml/goyaml.v2"
 
 	"kubevirt.io/containerized-data-importer/pkg/common"
 	dvc "kubevirt.io/containerized-data-importer/pkg/controller/datavolume"
@@ -38,6 +39,9 @@ type pvcMutatingWebhook struct {
 }
 
 func (wh *pvcMutatingWebhook) Admit(ar admissionv1.AdmissionReview) *admissionv1.AdmissionResponse {
+
+	klog.Info("[pvc-mutate] Admit()")
+
 	if ar.Request.Operation != admissionv1.Create {
 		return allowedAdmissionResponse()
 	}
@@ -51,6 +55,8 @@ func (wh *pvcMutatingWebhook) Admit(ar admissionv1.AdmissionReview) *admissionv1
 		return toAdmissionResponseError(err)
 	}
 
+	klog.Infof("[pvc-mutate] mutating pvc %s in ns %s", pvc.Name, pvc.Namespace)
+
 	// Note the webhook LabelSelector should not pass us such pvcs
 	if pvc.Labels[common.PvcApplyStorageProfileLabel] != "true" {
 		klog.Warningf("Got PVC %s/%s which was not labeled for rendering", pvc.Namespace, pvc.Name)
@@ -58,9 +64,16 @@ func (wh *pvcMutatingWebhook) Admit(ar admissionv1.AdmissionReview) *admissionv1
 	}
 
 	pvcCpy := pvc.DeepCopy()
+	klog.Infof("[pvc-mutate] calling dvc.RederPvc()...")
 	if err := dvc.RenderPvc(context.TODO(), wh.cachedClient, pvcCpy); err != nil {
 		return toAdmissionResponseError(err)
 	}
 
+	bytes, err := yaml.Marshal(pvcCpy)
+	if err != nil {
+		klog.Infof("[pvc-mutate] error marshal pvc %v", err)
+	}
+
+	klog.Infof("[pvc-mutate] patching rendered pvc ---\n%s\n---", string(bytes))
 	return toPatchResponse(pvc, pvcCpy)
 }
