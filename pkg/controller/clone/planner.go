@@ -176,35 +176,47 @@ type PlanArgs struct {
 
 // Plan creates phases for populator clone
 func (p *Planner) Plan(ctx context.Context, args *PlanArgs) ([]Phase, error) {
+
+	args.Log.Info("Planning clone", "args", args)
+
 	if args.Strategy == cdiv1.CloneStrategySnapshot {
+		args.Log.Info("strategy is snapshot, planning snapshot clone")
 		if err := p.watchSnapshots(ctx, args.Log); err != nil {
+			args.Log.Error(err, "Unable to watch snapshots")
 			return nil, err
 		}
 	}
 
+	args.Log.Info("Planning based on source kind", "sourceKind", args.DataSource.Spec.Source.Kind)
+
 	if IsDataSourcePVC(args.DataSource.Spec.Source.Kind) {
+
+		args.Log.Info("Planning clone from PVC source")
+
 		if args.Strategy == cdiv1.CloneStrategyHostAssisted {
-			args.Log.V(3).Info("Planning host assisted clone from PVC")
+			args.Log.Info("Planning host assisted clone from PVC")
 
 			return p.planHostAssistedFromPVC(ctx, args)
 		} else if args.Strategy == cdiv1.CloneStrategySnapshot {
-			args.Log.V(3).Info("Planning snapshot clone from PVC")
+			args.Log.Info("Planning snapshot clone from PVC")
 
 			return p.planSnapshotFromPVC(ctx, args)
 		} else if args.Strategy == cdiv1.CloneStrategyCsiClone {
-			args.Log.V(3).Info("Planning csi clone from PVC")
+			args.Log.Info("Planning csi clone from PVC")
 
 			return p.planCSIClone(ctx, args)
 		}
 	}
 
 	if IsDataSourceSnapshot(args.DataSource.Spec.Source.Kind) {
+		args.Log.Info("Planning clone from Snapshot source")
+
 		if args.Strategy == cdiv1.CloneStrategyHostAssisted {
-			args.Log.V(3).Info("Planning host assisted clone from Snapshot")
+			args.Log.Info("Planning host assisted clone from Snapshot")
 
 			return p.planHostAssistedFromSnapshot(ctx, args)
 		} else if args.Strategy == cdiv1.CloneStrategySnapshot {
-			args.Log.V(3).Info("Planning Smart clone from Snapshot")
+			args.Log.Info("Planning Smart clone from Snapshot")
 
 			return p.planSmartCloneFromSnapshot(ctx, args)
 		}
