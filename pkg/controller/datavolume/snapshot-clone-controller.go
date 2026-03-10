@@ -210,12 +210,15 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 	}
 
 	if pvc == nil {
+		log.Info("In snapshot clonesync, pvc is nil, need to create target pvc")
 		// Check if source snapshot exists and do proper validation before attempting to clone
 		if done, err := r.validateCloneAndSourceSnapshot(&syncRes); err != nil || !done {
 			return syncRes, err
 		}
 
+		log.Info("decide if call detectClonesize for snapshot clone", "storage", datavolume.Spec.Storage)
 		if datavolume.Spec.Storage != nil {
+			log.Info("yes call detectCloneSize for snapshot clone")
 			err := r.detectCloneSize(log, &syncRes)
 			if err != nil {
 				return syncRes, err
@@ -279,10 +282,11 @@ func (r *SnapshotCloneReconciler) syncSnapshotClone(log logr.Logger, req reconci
 }
 
 func (r *SnapshotCloneReconciler) detectCloneSize(log logr.Logger, syncState *dvSyncState) error {
+	log.Info("In snapshot clone detectCloneSize")
 	pvcSpec := syncState.pvcSpec
 	requestedSize := pvcSpec.Resources.Requests[corev1.ResourceStorage]
 	if !requestedSize.IsZero() {
-		log.V(3).Info("requested size is set, skipping size detection", "size", requestedSize)
+		log.Info("requested size is set, skipping size detection", "size", requestedSize)
 		return nil
 	}
 	// shouldn't happen after validation of clone source exist
@@ -295,7 +299,7 @@ func (r *SnapshotCloneReconciler) detectCloneSize(log logr.Logger, syncState *dv
 	}
 	pvcSpec.Resources.Requests[corev1.ResourceStorage] = *syncState.snapshot.Status.RestoreSize
 
-	log.V(3).Info("set pvc request size", "size", pvcSpec.Resources.Requests[corev1.ResourceStorage])
+	log.Info("set pvc request size", "size", pvcSpec.Resources.Requests[corev1.ResourceStorage])
 
 	return nil
 }

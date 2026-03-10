@@ -297,6 +297,7 @@ func (r *PvcCloneReconciler) syncClone(log logr.Logger, req reconcile.Request) (
 	}
 
 	if pvc == nil {
+		log.Info("In pvc syncClone, pvc is nil, this means we need to create the target PVC for the clone")
 		// Check if source PVC exists and do proper validation before attempting to clone
 		if done, err := r.validateCloneAndSourcePVC(&syncRes, log); err != nil {
 			return syncRes, err
@@ -306,7 +307,9 @@ func (r *PvcCloneReconciler) syncClone(log logr.Logger, req reconcile.Request) (
 
 		// Always call detect size, it will handle the case where size is specified
 		// and detection pod not necessary
+		log.Info("deciding if we need to detect clone size", "storage", datavolume.Spec.Storage)
 		if datavolume.Spec.Storage != nil {
+			log.Info("yes we need to detect clone size")
 			done, err := r.detectCloneSize(&syncRes)
 			if err != nil {
 				return syncRes, err
@@ -530,6 +533,8 @@ func (r *PvcCloneReconciler) isSourceReadyToClone(datavolume *cdiv1.DataVolume) 
 
 // detectCloneSize obtains and assigns the original PVC's size when cloning using an empty storage value
 func (r *PvcCloneReconciler) detectCloneSize(syncState *dvSyncState) (bool, error) {
+
+	fmt.Println("In pvc detectCloneSize")
 	sourcePvc, err := r.findSourcePvc(syncState.dvMutated)
 	if err != nil {
 		return false, err
@@ -540,13 +545,18 @@ func (r *PvcCloneReconciler) detectCloneSize(syncState *dvSyncState) (bool, erro
 	// when source is filesystem and target is block
 	requestedSize, hasSize := syncState.pvcSpec.Resources.Requests[corev1.ResourceStorage]
 	sizeRequired := !hasSize || requestedSize.IsZero()
+	fmt.Printf("deciding if we need to detect clone size: sizeRequired=%v, hasSize=%v, requestedSize=%v", sizeRequired, hasSize, requestedSize)
 	targetIsBlock := syncState.pvcSpec.VolumeMode != nil && *syncState.pvcSpec.VolumeMode == corev1.PersistentVolumeBlock
 	sourceIsFilesystem := cc.GetVolumeMode(sourcePvc) == corev1.PersistentVolumeFilesystem
 	// have to be explicit here or detection pod will crash
 	sourceIsKubevirt := sourcePvc.Annotations[cc.AnnContentType] == string(cdiv1.DataVolumeKubeVirt)
+
+	fmt.Printf("clone size detection conditions: sizeRequired=%v, targetIsBlock=%v, sourceIsFilesystem=%v, sourceIsKubevirt=%v", sizeRequired, targetIsBlock, sourceIsFilesystem, sourceIsKubevirt)
 	if !sizeRequired && (!targetIsBlock || !sourceIsFilesystem || !sourceIsKubevirt) {
 		return true, nil
 	}
+
+	fmt.Println("go on")
 
 	var targetSize int64
 	sourceCapacity := sourcePvc.Status.Capacity.Storage()

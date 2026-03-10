@@ -309,15 +309,21 @@ func hasCloneSourceRef(pvc *v1.PersistentVolumeClaim) bool {
 func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeClaimSpec, isClone bool, log *logr.Logger) error {
 	requestedSize, found := pvcSpec.Resources.Requests[v1.ResourceStorage]
 
+	log.Info("In renderPvcSpecVolumeSize", "pvc", *pvcSpec, "requestedSize", requestedSize, "found", found, "isClone", isClone)
+
 	// Storage size can be empty when cloning
 	if !found {
 		if !isClone {
 			return errors.Errorf("PVC Spec is not valid - missing storage size")
 		}
+		log.Info("PVC Spec is missing storage size, set to empty")
 		setRequestedVolumeSize(pvcSpec, resource.Quantity{})
+
+		log.Info("return")
 		return nil
 	}
 
+	log.Info("found requested size", "requestedSize", requestedSize)
 	// Kubevirt doesn't allow disks smaller than 1MiB. Rejecting for consistency.
 	if requestedSize.Value() < units.MiB {
 		return errors.Errorf("PVC Spec is not valid - storage size should be at least 1MiB")
@@ -327,12 +333,14 @@ func renderPvcSpecVolumeSize(client client.Client, pvcSpec *v1.PersistentVolumeC
 	if err != nil {
 		return err
 	}
+	log.Info("requested size after inflation", "requestedSize", requestedSize)
 
 	if scName := pvcSpec.StorageClassName; scName != nil {
 		if requestedSize, err = cc.GetEffectiveVolumeSize(context.TODO(), client, requestedSize, *scName, log); err != nil {
 			return err
 		}
 	}
+	log.Info("requested size after applying storage class overhead (from storageProfile)", "requestedSize", requestedSize)
 
 	setRequestedVolumeSize(pvcSpec, requestedSize)
 
