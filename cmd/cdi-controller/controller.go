@@ -284,6 +284,10 @@ func start() {
 		klog.Errorf("Unable to setup datavolume external-population controller: %v", err)
 		os.Exit(1)
 	}
+	if _, err := dvc.NewOwnershipController(ctx, mgr, log, installerLabels); err != nil {
+		klog.Errorf("Unable to setup datavolume ownership controller: %v", err)
+		os.Exit(1)
+	}
 
 	if _, err := controller.NewImportController(mgr, log, importerImage, pullPolicy, verbose, installerLabels); err != nil {
 		klog.Errorf("Unable to setup import controller: %v", err)
