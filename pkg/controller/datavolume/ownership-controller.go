@@ -133,6 +133,18 @@ func (r *OwnershipReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	}
 
 	log.V(3).Info("Reconciling DataVolume ownership change", "DataVolume", dv.Name)
+	if len(dv.OwnerReferences) == 0 {
+		log.Info("No owner references")
+		return reconcile.Result{}, nil
+	}
+
+	for _, ownerRef := range dv.OwnerReferences {
+		log.Info("Owner reference", "Kind", ownerRef.Kind, "Name", ownerRef.Name, "UID", ownerRef.UID)
+	}
+
+	// No-op: this controller's purpose is to enqueue DataVolumes when their owned
+	// PVCs' ownership changes. The actual DV reconciliation logic is handled by
+	// the operation-specific controllers (import, upload, clone, etc.).
 
 	// No-op: this controller's purpose is to enqueue DataVolumes when their owned
 	// PVCs' ownership changes. The actual DV reconciliation logic is handled by
